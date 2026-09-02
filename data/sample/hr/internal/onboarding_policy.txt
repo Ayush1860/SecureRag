@@ -1,0 +1,5 @@
+Internal HR Policy - New Employee Onboarding
+
+All new engineering hires complete a two-week onboarding program covering
+safety certification for warehouse robotics testing, codebase orientation,
+and security training. Employees are entitled to 18 days of paid leave annually.

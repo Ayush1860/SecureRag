@@ -1,0 +1,11 @@
+[project]
+name = "securerag"
+version = "1.0.0"
+description = "Security-Hardened Enterprise RAG System"
+readme = "README.md"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

@@ -1,0 +1,10 @@
+Internal Engineering Note - Sentinel Navigation Stack
+
+The Sentinel AMR navigation stack runs a three-layer architecture: a perception layer
+(LiDAR point cloud processing plus a lightweight CNN for dynamic obstacle classification),
+a planning layer (hybrid A* for global paths, DWA for local avoidance), and a control
+layer running on a real-time Linux kernel with a 50ms control loop budget.
+
+Known limitation: in warehouses with reflective mylar-wrapped pallets, the LiDAR
+occasionally reports false positives for obstacles, causing unnecessary replanning.
+A proposed fix using sensor fusion with the onboard depth camera is planned for Q3.

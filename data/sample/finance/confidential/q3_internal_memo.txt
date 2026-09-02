@@ -1,0 +1,5 @@
+CONFIDENTIAL - Finance Internal Memo - Q3 Review
+
+Q3 gross margin came in at 34.2%, down from 37.1% in Q2, primarily driven by
+increased component costs on the LiDAR subsystem following a supplier price
+renegotiation. Cash runway at current burn rate is approximately 14 months.

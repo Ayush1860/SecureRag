@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.env
+*.pyc
+data/chroma_db/
+data/audit.jsonl
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+.DS_Store

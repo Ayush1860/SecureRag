@@ -1,0 +1,9 @@
+Acme Robotics Inc. is a publicly traded industrial automation company founded in 2015,
+headquartered in Bengaluru, India. The company designs autonomous mobile robots (AMRs)
+for warehouse logistics and has deployment partnerships with three of the top five
+e-commerce fulfillment operators in South Asia. Acme's flagship product line, the
+Sentinel series, uses LiDAR and vision-based SLAM for indoor navigation without
+requiring facility-wide infrastructure changes.
+
+The company reported revenue of approximately 240 crore INR in the most recent fiscal
+year, with international expansion into Southeast Asia planned for the next two years.
