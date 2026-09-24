@@ -16,3 +16,4 @@ anthropic>=0.50,<1
 groq>=0.31,<1
 google-genai>=0.1,<2
 streamlit>=1.35,<2
+psutil>=5.9,<8

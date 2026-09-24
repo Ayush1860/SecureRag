@@ -10,3 +10,5 @@ node_modules/
 dist/
 **/dist/
 .DS_Store
+data/synthetic/
+data/bench/

@@ -1,0 +1,29 @@
+{
+  "label": "docs_2000",
+  "generated_at": "2026-09-25 02:37:47",
+  "git_commit": "e79094b",
+  "hardware": {
+    "platform": "Windows-10-10.0.26200-SP0",
+    "python": "3.11.4",
+    "cpu_count": 8,
+    "ram_gb": 15.8,
+    "torch": "2.2.2+cu121",
+    "gpu": "NVIDIA GeForce GTX 1650"
+  },
+  "data_dir": "data/synthetic/docs_2000",
+  "corpus": {
+    "docs": 2000,
+    "words": 834308,
+    "canaries": 665,
+    "injected": 46
+  },
+  "queries_per_role": 200,
+  "store_size_mb": 0.18,
+  "ingest": {
+    "process_wall_s": 44.97,
+    "peak_rss_mb": 1212.6,
+    "ok": false,
+    "error": "2026-09-25 02:37:11,676 INFO sentence_transformers.SentenceTransformer: Use pytorch device_name: cuda\n2026-09-25 02:37:11,676 INFO sentence_transformers.SentenceTransformer: Load pretrained SentenceTransformer: sentence-transformers/all-MiniLM-L6-v2\nC:\\Users\\hp\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\transformers\\tokenization_utils_base.py:1601: FutureWarning: `clean_up_tokenization_spaces` was not set. It will be set to `True` by default. This behavior will be depracted in transformers v4.45, and will be then set to `False` by default. For more details check this issue: https://github.com/huggingface/transformers/issues/31884\n  warnings.warn(\n  attn_output = torch.nn.functional.scaled_dot_product_attention(\nTraceback (most recent call last):\n  File \"D:\\SecureRag-main\\scripts\\benchmark_scale.py\", line 465, in <module>\n    sys.exit(main())\n             ^^^^^^\n  File \"D:\\SecureRag-main\\scripts\\benchmark_scale.py\", line 452, in main\n    result = _worker_ingest(args) if args.worker == \"ingest\" else _worker_serve(args)\n             ^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\SecureRag-main\\scripts\\benchmark_scale.py\", line 78, in _worker_ingest\n    info = _ingest_corpus(args.data_dir, args.chroma_dir)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\SecureRag-main\\scripts\\benchmark_scale.py\", line 56, in _ingest_corpus\n    _, collection, _, _ = build_store(data_dir, chroma_dir, VectorStoreEncryptor())\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\SecureRag-main\\securerag\\retrieval\\store.py\", line 49, in build_store\n    collection.add(ids=ids, embeddings=embeddings.tolist(), documents=payloads, metadatas=metas)\n  File \"C:\\Users\\hp\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\chromadb\\api\\models\\Collection.py\", line 118, in add\n    self._client._add(\n  File \"C:\\Users\\hp\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\chromadb\\api\\rust.py\", line 484, in _add\n    return self.bindings.add(\n           ^^^^^^^^^^^^^^^^^^\nchromadb.errors.InternalError: ValueError: Batch size of 9412 is greater than max batch size of 5461"
+  },
+  "serve": null
+}
