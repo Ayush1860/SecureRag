@@ -16,7 +16,7 @@ dependencies = [
     "chromadb>=1.0,<2",
     "sentence-transformers>=3.4,<6",
     "pycryptodome>=3.22,<4",
-    "rank-bm25>=0.2,<1",
+    "bm25s>=0.2.6,<1",
     "numpy>=1.26,<3",
     "pydantic>=2.9,<3",
     "python-dotenv>=1.0,<2",
@@ -37,7 +37,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.3,<9"]
+qdrant = ["qdrant-client>=1.10,<2"]
+dev = ["pytest>=8.3,<9", "qdrant-client>=1.10,<2"]
 
 [tool.setuptools.packages.find]
 include = ["securerag*"]

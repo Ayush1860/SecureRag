@@ -6,9 +6,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from securerag.config import Settings
-from securerag.retrieval.hybrid import HybridRetriever
-from securerag.retrieval.store import load_store
+from securerag.config import Settings, get_settings
+from securerag.retrieval.store import open_serving_stack
 from securerag.security.audit import read_recent_audit_events
 from securerag.security.encryption import VectorStoreEncryptor, DecryptionError
 from securerag.security.rbac import ROLE_POLICY, AccessControlError
@@ -22,21 +21,16 @@ state: dict[str, Any] = {}
 async def lifespan(app: FastAPI):
     injected = "engine" in state
     if not injected:
-        settings = Settings()
+        settings = get_settings()
         encryptor = VectorStoreEncryptor()
-        client, collection, encoder, chunks = load_store(
-            settings.chroma_dir, settings.data_dir, encryptor
-        )
-        retriever = HybridRetriever(collection, encoder, chunks, fusion_k=settings.fusion_k)
-        engine = SecureRAG(collection, retriever, encryptor, settings.audit_log_path)
+        # Fails fast (no silent rebuild) on an empty store, wrong key or model mismatch.
+        stack = open_serving_stack(settings, encryptor)
+        engine = SecureRAG(stack.store, stack.retriever, encryptor, settings.audit_log_path)
 
         state["settings"] = settings
         state["encryptor"] = encryptor
-        state["client"] = client
-        state["collection"] = collection
-        state["encoder"] = encoder
-        state["chunks"] = chunks
-        state["retriever"] = retriever
+        state["store"] = stack.store
+        state["retriever"] = stack.retriever
         state["engine"] = engine
     yield
     if not injected:
@@ -79,8 +73,8 @@ class QueryRequest(BaseModel):
 
 @app.get("/api/health")
 def health():
-    collection = state.get("collection")
-    chunk_count = collection.count() if collection else 0
+    store = state.get("store")
+    chunk_count = store.count() if store else 0
     return {
         "status": "ok",
         "chunks": chunk_count,
@@ -95,7 +89,7 @@ def get_roles():
 
 @app.get("/api/audit")
 def get_audit_trail(limit: int = Query(default=20, ge=1, le=100)):
-    settings: Settings = state.get("settings", Settings())
+    settings: Settings = state.get("settings") or get_settings()
     events = read_recent_audit_events(settings.audit_log_path, limit=limit)
     return events
 

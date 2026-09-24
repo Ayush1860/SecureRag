@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 import pytest
-from securerag.config import Settings
+from securerag.config import get_settings
 from securerag.evaluation.datasets import (
     INJECTION_BENCHMARK_CASES,
     RETRIEVAL_BENCHMARK_CASES,
@@ -24,8 +24,7 @@ from securerag.evaluation.performance import (
 )
 from securerag.evaluation.runner import generate_markdown_report, run_evaluation_suite
 from securerag.pipeline.graph import SecureRAG
-from securerag.retrieval.hybrid import HybridRetriever
-from securerag.retrieval.store import build_store
+from securerag.retrieval.store import open_serving_stack, run_ingestion
 from securerag.security.encryption import VectorStoreEncryptor
 from scripts.evaluate import (
     evaluate_prompt_injection as compat_evaluate_prompt_injection,
@@ -35,20 +34,18 @@ from scripts.evaluate import (
 
 @pytest.fixture(scope="module")
 def rag_components():
-    settings = Settings()
+    # Real embedding model over data/sample, built into the configured store (full rebuild).
+    settings = get_settings()
     encryptor = VectorStoreEncryptor()
-    _, collection, encoder, chunks = build_store(
-        settings.data_dir, settings.chroma_dir, encryptor
-    )
-    retriever = HybridRetriever(collection, encoder, chunks, fusion_k=settings.fusion_k)
-    engine = SecureRAG(collection, retriever, encryptor, settings.audit_log_path)
+    run_ingestion(settings, encryptor, full_rebuild=True)
+    stack = open_serving_stack(settings, encryptor)
+    engine = SecureRAG(stack.store, stack.retriever, encryptor, settings.audit_log_path)
     return {
         "settings": settings,
         "encryptor": encryptor,
-        "collection": collection,
-        "encoder": encoder,
-        "chunks": chunks,
-        "retriever": retriever,
+        "store": stack.store,
+        "encoder": stack.encoder,
+        "retriever": stack.retriever,
         "engine": engine,
     }
 

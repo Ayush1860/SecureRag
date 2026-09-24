@@ -60,15 +60,22 @@ def _ingest_corpus(data_dir: str, chroma_dir: str) -> dict[str, Any]:
 
 
 def _open_engine(data_dir: str, chroma_dir: str, audit_path: str):
+    """Returns (engine, timings) where timings splits startup into model load and store open."""
+    from securerag.config import get_settings
     from securerag.pipeline.graph import SecureRAG
-    from securerag.retrieval.hybrid import HybridRetriever
-    from securerag.retrieval.store import load_store
+    from securerag.retrieval.embedder import get_encoder
+    from securerag.retrieval.store import open_serving_stack
     from securerag.security.encryption import VectorStoreEncryptor
 
+    settings = get_settings().model_copy(update={"data_dir": data_dir, "chroma_dir": chroma_dir})
+    t0 = time.perf_counter()
+    encoder = get_encoder(settings.embed_model, settings.embed_device)
+    t1 = time.perf_counter()
     encryptor = VectorStoreEncryptor()
-    _, collection, encoder, chunks = load_store(chroma_dir, data_dir, encryptor)
-    retriever = HybridRetriever(collection, encoder, chunks)
-    return SecureRAG(collection, retriever, encryptor, audit_path)
+    stack = open_serving_stack(settings, encryptor, encoder=encoder)
+    t2 = time.perf_counter()
+    engine = SecureRAG(stack.store, stack.retriever, encryptor, audit_path)
+    return engine, {"model_load_s": round(t1 - t0, 3), "store_open_s": round(t2 - t1, 3)}
 
 
 # --------------------------------------------------------------------------------------
@@ -90,7 +97,7 @@ def _worker_serve(args: argparse.Namespace) -> dict[str, Any]:
     queries: list[dict[str, str]] = json.loads(Path(args.queries_file).read_text(encoding="utf-8"))
 
     t0 = time.perf_counter()
-    engine = _open_engine(args.data_dir, args.chroma_dir, args.audit_path)
+    engine, startup_parts = _open_engine(args.data_dir, args.chroma_dir, args.audit_path)
     startup_s = time.perf_counter() - t0
 
     # Time the retriever separately by wrapping the instance method.
@@ -152,6 +159,7 @@ def _worker_serve(args: argparse.Namespace) -> dict[str, Any]:
     all_ret = [x for s in per_role.values() for x in s["retrieval_ms"]]
     return {
         "startup_s": startup_s,
+        "startup_parts": startup_parts,
         "per_role": summary,
         "latency_ms": _percentiles(all_lat),
         "retrieval_ms": _percentiles(all_ret),
@@ -318,6 +326,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         "|---|---|",
         f"| Status | {'OK' if srv['ok'] else 'FAILED'} |",
         f"| Engine startup (s) | {srv.get('startup_s', '-')} |",
+        f"| - embedding model load (s) | {srv.get('startup_parts', {}).get('model_load_s', '-')} |",
+        f"| - store open + key check + retriever (s) | {srv.get('startup_parts', {}).get('store_open_s', '-')} |",
         f"| Serve process peak RSS (MB) | {srv['peak_rss_mb']} |",
         f"| **Canary leaks** | **{srv.get('canary_leaks', '-')}** |",
         "",

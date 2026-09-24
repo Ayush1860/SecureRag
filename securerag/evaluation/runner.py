@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from securerag.config import Settings
+from securerag.config import get_settings
 from securerag.evaluation.datasets import (
     INJECTION_BENCHMARK_CASES,
     RETRIEVAL_BENCHMARK_CASES,
@@ -24,8 +24,7 @@ from securerag.evaluation.performance import evaluate_performance
 from securerag.evaluation.retrieval import evaluate_retrieval
 from securerag.evaluation.security import evaluate_security
 from securerag.pipeline.graph import SecureRAG
-from securerag.retrieval.hybrid import HybridRetriever
-from securerag.retrieval.store import build_store
+from securerag.retrieval.store import open_serving_stack, run_ingestion
 from securerag.security.encryption import VectorStoreEncryptor
 
 
@@ -180,16 +179,15 @@ def run_evaluation_suite(
     print("=" * 72)
 
     # 1. Initialize Pipeline & Store
-    settings = Settings()
+    settings = get_settings()
     os.environ["LLM_PROVIDER"] = "mock"  # Deterministic offline baseline
 
-    print("\n[Setup] Initializing AES Encryptor, ChromaDB, and Hybrid Retriever...")
+    print("\n[Setup] Initializing AES Encryptor, vector store, and Hybrid Retriever...")
     encryptor = VectorStoreEncryptor()
-    _, collection, encoder, chunks = build_store(
-        settings.data_dir, settings.chroma_dir, encryptor
-    )
-    retriever = HybridRetriever(collection, encoder, chunks, fusion_k=settings.fusion_k)
-    engine = SecureRAG(collection, retriever, encryptor, settings.audit_log_path)
+    run_ingestion(settings, encryptor, full_rebuild=True)
+    stack = open_serving_stack(settings, encryptor)
+    encoder, retriever = stack.encoder, stack.retriever
+    engine = SecureRAG(stack.store, retriever, encryptor, settings.audit_log_path)
 
     # 2. Retrieval Evaluation
     print("\n[1/3] Benchmarking Retrieval (Recall@K, Precision@K, MRR)...")

@@ -1,6 +1,8 @@
 import pytest
-from unittest.mock import MagicMock
-from securerag.retrieval.hybrid import Chunk, HybridRetriever, compute_rrf
+
+from securerag.retrieval.hybrid import compute_rrf, matches_filter
+from securerag.retrieval.sparse import partitions_for_filter
+from securerag.security.rbac import build_chroma_filter
 
 
 def test_compute_rrf_scoring():
@@ -18,35 +20,36 @@ def test_compute_rrf_scoring():
     assert scores["docA"] > scores["docD"]
 
 
-def test_hybrid_retriever_filtering():
-    chunks = [
-        Chunk(id="c1", encrypted_text="enc1", text="LiDAR warehouse sensor", metadata={"department": "general", "clearance": "public"}),
-        Chunk(id="c2", encrypted_text="enc2", text="Financial margin report", metadata={"department": "finance", "clearance": "confidential"}),
-        Chunk(id="c3", encrypted_text="enc3", text="Engineering robotics specs", metadata={"department": "engineering", "clearance": "internal"}),
-    ]
-
-    mock_collection = MagicMock()
-    mock_collection.count.return_value = 3
-    mock_collection.query.return_value = {"ids": [["c1", "c2"]]}
-
-    mock_encoder = MagicMock()
-    mock_encoder.encode.return_value = MagicMock(tolist=lambda: [[0.1, 0.2]])
-
-    retriever = HybridRetriever(mock_collection, mock_encoder, chunks)
-
-    # Filter allowing only general / public
+def test_hybrid_retriever_filtering(rag_stack):
+    retriever = rag_stack["stack"].retriever
     where_filter = {
         "$and": [
             {"department": {"$in": ["general"]}},
             {"clearance": {"$in": ["public"]}},
         ]
     }
-
-    filtered = retriever._filter_allowed_chunks(where_filter)
-    assert len(filtered) == 1
-    assert filtered[0].id == "c1"
-
-    # Hybrid retrieve
-    results = retriever.retrieve("sensor", top_k=2, where=where_filter)
+    results = retriever.retrieve("sensor LiDAR revenue margin", top_k=5, where=where_filter)
     assert len(results) >= 1
     assert all(r.metadata["department"] == "general" for r in results)
+    assert all(r.metadata["clearance"] == "public" for r in results)
+
+
+@pytest.mark.parametrize("role", ["guest", "employee", "finance_lead", "exec"])
+def test_retrieval_never_returns_unauthorized_chunks(rag_stack, role):
+    retriever = rag_stack["stack"].retriever
+    where = build_chroma_filter(role)
+    for query in ("Q3 gross margin cash runway", "revenue", "onboarding leave", "navigation stack", "LiDAR"):
+        for chunk in retriever.retrieve(query, top_k=10, where=where):
+            assert matches_filter(chunk.metadata, where)
+
+
+def test_matches_filter_fails_closed_on_unknown_operator():
+    assert not matches_filter({"department": "general"}, {"department": {"$nin": ["hr"]}})
+    assert matches_filter({"department": "general"}, {"department": "general"})
+
+
+def test_partitions_for_filter_matches_role_policy():
+    assert partitions_for_filter(build_chroma_filter("guest")) == ["general.public"]
+    fin = set(partitions_for_filter(build_chroma_filter("finance_lead")))
+    assert "finance.confidential" in fin and not any(p.startswith("hr.") for p in fin)
+    assert partitions_for_filter({"$or": [{"department": "hr"}]}) == []  # not understood -> nothing

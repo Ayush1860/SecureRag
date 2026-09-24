@@ -9,8 +9,9 @@ from securerag.ingestion.loaders import LoaderError, load_file
 from securerag.ingestion.metadata import MetadataError, MetadataResolver
 from securerag.ingestion.pipeline import IngestError, IngestPipeline
 from securerag.ingestion.state import IngestState
-from securerag.retrieval.vector_store import ChromaVectorStore
 from securerag.security.encryption import VectorStoreEncryptor
+
+from conftest import make_store
 
 
 # --------------------------------------------------------------------------- helpers
@@ -54,7 +55,7 @@ def env(tmp_path):
     encryptor = VectorStoreEncryptor()
 
     def make_pipeline(enc=encryptor, s=settings):
-        store = ChromaVectorStore(tmp_path / "chroma")
+        store = make_store(tmp_path.name)
         state = IngestState(tmp_path / "state.sqlite")
         return IngestPipeline(s, enc, store, state, encoder=FakeEncoder(), length_fn=whitespace_length)
 
@@ -273,13 +274,13 @@ def test_upserts_respect_store_batch_limit(env):
     pipeline = env["make"]()
     pipeline.store.max_batch = 3
     seen_sizes = []
-    real_upsert = pipeline.store.collection.upsert
+    real_write = pipeline.store._write
 
-    def spy(**kw):
-        seen_sizes.append(len(kw["ids"]))
-        return real_upsert(**kw)
+    def spy(ids, *rest):
+        seen_sizes.append(len(ids))
+        return real_write(ids, *rest)
 
-    pipeline.store.collection.upsert = spy
+    pipeline.store._write = spy
     report = pipeline.run(env["data"])
     assert max(seen_sizes) <= 3
     assert sum(seen_sizes) == report.chunks_written

@@ -1,15 +1,21 @@
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
-from rank_bm25 import BM25Okapi
+
+from securerag.retrieval.sparse import SparseRetriever, partitions_for_filter
+from securerag.retrieval.vector_store import VectorStore
+from securerag.security.rbac import metadata_matches_filter as matches_filter
 
 
 @dataclass
 class Chunk:
+    """A retrieved chunk reference. Carries no plaintext and no ciphertext: payloads are
+    fetched by ID and decrypted only for the final, authorized top-k of a single request."""
+
     id: str
-    encrypted_text: str
-    text: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
+    score: float = 0.0
 
 
 def compute_rrf(rankings: list[list[str]], k: int = 60) -> dict[str, float]:
@@ -26,118 +32,66 @@ def compute_rrf(rankings: list[list[str]], k: int = 60) -> dict[str, float]:
 
 class HybridRetriever:
     """
-    Hybrid retriever combining ChromaDB dense vector search and BM25Okapi sparse lexical search,
-    fused using Reciprocal Rank Fusion (RRF).
-    
-    Ensures that both dense and sparse retrieval strictly enforce RBAC metadata filtering
-    to prevent unauthorized lexical or semantic leakage.
+    Hybrid retriever: dense vector search (RBAC ``where`` pre-filter in the vector store) and
+    partitioned sparse BM25 (only the partitions the filter allows are opened), fused with
+    Reciprocal Rank Fusion, then a strict post-fusion allow-list check on each candidate's
+    metadata. Returns chunk IDs + metadata only.
     """
 
-    def __init__(self, collection, encoder, chunks: list[Chunk], fusion_k: int = 60):
-        self.collection = collection
+    def __init__(
+        self,
+        store: VectorStore,
+        encoder: Any,
+        sparse: SparseRetriever | None = None,
+        fusion_k: int = 60,
+        dense_candidates: int = 50,
+        sparse_candidates: int = 50,
+    ):
+        self.store = store
         self.encoder = encoder
-        self.chunks = chunks
+        self.sparse = sparse
         self.fusion_k = fusion_k
-        self._bm25 = (
-            BM25Okapi([c.text.lower().split() for c in chunks]) if chunks else None
-        )
-        self._by_id = {c.id: c for c in chunks}
+        self.dense_candidates = dense_candidates
+        self.sparse_candidates = sparse_candidates
+        self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="retrieve")
 
-    def _filter_allowed_chunks(self, where: dict[str, Any] | None) -> list[Chunk]:
-        """Robustly extracts allowed departments and clearances from the query filter."""
-        if not where:
-            return self.chunks
+    def _dense(self, query: str, where: dict[str, Any] | None) -> list[str]:
+        embedding = self.encoder.encode([query], normalize_embeddings=True)[0]
+        embedding = embedding.tolist() if hasattr(embedding, "tolist") else list(embedding)
+        return [cid for cid, _ in self.store.query(embedding, self.dense_candidates, where)]
 
-        allowed_depts: set[str] = set()
-        allowed_clearances: set[str] = set()
-
-        conditions = where.get("$and", [where])
-        for cond in conditions:
-            if not isinstance(cond, dict):
-                continue
-            dept_cond = cond.get("department")
-            if isinstance(dept_cond, dict) and "$in" in dept_cond:
-                allowed_depts.update(dept_cond["$in"])
-            elif isinstance(dept_cond, str):
-                allowed_depts.add(dept_cond)
-
-            clearance_cond = cond.get("clearance")
-            if isinstance(clearance_cond, dict) and "$in" in clearance_cond:
-                allowed_clearances.update(clearance_cond["$in"])
-            elif isinstance(clearance_cond, str):
-                allowed_clearances.add(clearance_cond)
-
-        filtered = []
-        for c in self.chunks:
-            meta = c.metadata or {}
-            dept = meta.get("department")
-            clearance = meta.get("clearance")
-            if allowed_depts and dept not in allowed_depts:
-                continue
-            if allowed_clearances and clearance not in allowed_clearances:
-                continue
-            filtered.append(c)
-
-        return filtered
-
-    def retrieve(
-        self, query: str, top_k: int = 5, where: dict[str, Any] | None = None
-    ) -> list[Chunk]:
-        """
-        Executes hybrid retrieval:
-        1. Dense retrieval over ChromaDB with metadata filter.
-        2. Sparse retrieval over authorized BM25 corpus matching metadata filter.
-        3. Reciprocal Rank Fusion combining both candidate lists.
-        4. Strict post-fusion RBAC candidate containment check.
-        """
-        if not self.chunks or self.collection.count() == 0:
+    def _sparse(self, query: str, partitions: list[str]) -> list[str]:
+        if self.sparse is None or not partitions:
             return []
+        return [cid for cid, _ in self.sparse.search(query, partitions, self.sparse_candidates)]
 
+    def candidates(self, query: str, where: dict[str, Any] | None = None) -> list[tuple[str, float]]:
+        """Fused (chunk_id, rrf_score) candidates, best first, before the allow-list check."""
         clean_query = query.strip()
         if not clean_query:
             return []
+        partitions = partitions_for_filter(where)
+        if where and not partitions:
+            return []  # filter not understood: fail closed
 
-        # 1. Dense retrieval
-        q_emb = self.encoder.encode([clean_query], normalize_embeddings=True)[0].tolist()
-        num_candidates = min(max(top_k * 2, top_k), self.collection.count())
+        dense_future = self._pool.submit(self._dense, clean_query, where)
+        sparse_future = self._pool.submit(self._sparse, clean_query, partitions)
+        fused = compute_rrf([dense_future.result(), sparse_future.result()], k=self.fusion_k)
+        return sorted(fused.items(), key=lambda item: item[1], reverse=True)
 
-        dense_kwargs: dict[str, Any] = {
-            "query_embeddings": [q_emb],
-            "n_results": num_candidates,
-        }
-        if where:
-            dense_kwargs["where"] = where
-
-        dense_result = self.collection.query(**dense_kwargs)
-        dense_ids = dense_result.get("ids", [[]])[0]
-
-        # 2. Sparse retrieval (strictly filtered by RBAC metadata)
-        allowed_chunks = self._filter_allowed_chunks(where)
-        allowed_id_set = {c.id for c in allowed_chunks}
-
-        sparse_ids: list[str] = []
-        if self._bm25 and allowed_chunks:
-            tokens = clean_query.lower().split()
-            if tokens:
-                corpus_scores = self._bm25.get_scores(tokens)
-                ranked_sparse = sorted(
-                    (
-                        (c.id, corpus_scores[i])
-                        for i, c in enumerate(self.chunks)
-                        if c.id in allowed_id_set and corpus_scores[i] > 0
-                    ),
-                    key=lambda x: x[1],
-                    reverse=True,
-                )
-                sparse_ids = [cid for cid, _ in ranked_sparse[: top_k * 2]]
-
-        # 3. Reciprocal Rank Fusion
-        fused = compute_rrf([dense_ids, sparse_ids], k=self.fusion_k)
-
-        # 4. Return top_k Chunk instances strictly restricted to allowed chunks
-        ranked_cids = [
-            cid for cid in sorted(fused.keys(), key=lambda cid: fused[cid], reverse=True)
-            if cid in self._by_id and cid in allowed_id_set
-        ][:top_k]
-
-        return [self._by_id[cid] for cid in ranked_cids]
+    def retrieve(self, query: str, top_k: int = 5, where: dict[str, Any] | None = None,
+                 limit: int | None = None) -> list[Chunk]:
+        """Top ``limit or top_k`` authorized chunks (IDs + metadata)."""
+        want = limit or top_k
+        ranked = self.candidates(query, where)
+        results: list[Chunk] = []
+        # Fetch metadata in windows so a few filtered-out candidates don't shrink the result.
+        for start in range(0, len(ranked), max(want * 2, 10)):
+            window = ranked[start:start + max(want * 2, 10)]
+            scores = dict(window)
+            for cid, meta in self.store.get_metadata([cid for cid, _ in window]):
+                if matches_filter(meta, where):
+                    results.append(Chunk(id=cid, metadata=meta, score=scores[cid]))
+                    if len(results) >= want:
+                        return results
+        return results

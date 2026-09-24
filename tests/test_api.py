@@ -1,33 +1,14 @@
 import pytest
-from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
 from app.api import app, state
-from securerag.retrieval.hybrid import Chunk, HybridRetriever
-from securerag.security.encryption import VectorStoreEncryptor
-from securerag.pipeline.graph import SecureRAG
 
 
 @pytest.fixture
-def client_with_mock_state(tmp_path):
-    encryptor = VectorStoreEncryptor()
-    text = "Acme Robotics operates in Bengaluru."
-    c1 = Chunk(id="c1", encrypted_text=encryptor.encrypt(text), text=text, metadata={"department": "general", "clearance": "public", "source": "company_overview.txt"})
-
-    collection = MagicMock()
-    collection.count.return_value = 1
-    collection.query.return_value = {"ids": [["c1"]]}
-
-    encoder = MagicMock()
-    encoder.encode.return_value = MagicMock(tolist=lambda: [[0.1, 0.2]])
-
-    retriever = HybridRetriever(collection, encoder, [c1])
-    audit_path = str(tmp_path / "api_audit.jsonl")
-    engine = SecureRAG(collection, retriever, encryptor, audit_path)
-
-    state["collection"] = collection
-    state["engine"] = engine
-    state["encryptor"] = encryptor
-    state["settings"] = MagicMock(audit_log_path=audit_path)
+def client_with_mock_state(rag_stack):
+    state["store"] = rag_stack["stack"].store
+    state["engine"] = rag_stack["engine"]
+    state["encryptor"] = rag_stack["encryptor"]
+    state["settings"] = rag_stack["settings"]
 
     with TestClient(app) as client:
         yield client

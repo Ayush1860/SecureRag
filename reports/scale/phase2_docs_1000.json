@@ -1,0 +1,128 @@
+{
+  "label": "phase2_docs_1000",
+  "generated_at": "2026-09-25 03:43:01",
+  "git_commit": "2fd2960",
+  "hardware": {
+    "platform": "Windows-10-10.0.26200-SP0",
+    "python": "3.11.4",
+    "cpu_count": 8,
+    "ram_gb": 15.8,
+    "torch": "2.2.2+cu121",
+    "gpu": "NVIDIA GeForce GTX 1650"
+  },
+  "data_dir": "data/synthetic/docs_1000",
+  "corpus": {
+    "docs": 1000,
+    "words": 414740,
+    "canaries": 302,
+    "injected": 24
+  },
+  "queries_per_role": 200,
+  "store_size_mb": 52.73,
+  "ingest": {
+    "process_wall_s": 37.33,
+    "peak_rss_mb": 1075.0,
+    "ok": true,
+    "chunks": 3101,
+    "ingest_s": 36.44,
+    "chunks_per_s": 85.1
+  },
+  "serve": {
+    "peak_rss_mb": 1036.0,
+    "process_wall_s": 36.55,
+    "ok": true,
+    "startup_s": 13.47,
+    "per_role": {
+      "guest": {
+        "queries": 200,
+        "errors": 0,
+        "latency_ms": {
+          "p50": 21.68,
+          "p95": 23.39,
+          "p99": 24.03,
+          "mean": 21.88
+        },
+        "retrieval_ms": {
+          "p50": 16.52,
+          "p95": 18.02,
+          "p99": 18.79,
+          "mean": 16.7
+        },
+        "canary_leaks": 0,
+        "authorized_canaries_seen": 0,
+        "flagged_chunks": 10
+      },
+      "employee": {
+        "queries": 200,
+        "errors": 0,
+        "latency_ms": {
+          "p50": 26.86,
+          "p95": 29.51,
+          "p99": 30.86,
+          "mean": 28.01
+        },
+        "retrieval_ms": {
+          "p50": 21.72,
+          "p95": 24.25,
+          "p99": 25.8,
+          "mean": 22.84
+        },
+        "canary_leaks": 0,
+        "authorized_canaries_seen": 0,
+        "flagged_chunks": 18
+      },
+      "finance_lead": {
+        "queries": 200,
+        "errors": 0,
+        "latency_ms": {
+          "p50": 26.44,
+          "p95": 29.65,
+          "p99": 34.85,
+          "mean": 27.58
+        },
+        "retrieval_ms": {
+          "p50": 21.31,
+          "p95": 24.25,
+          "p99": 28.36,
+          "mean": 22.35
+        },
+        "canary_leaks": 0,
+        "authorized_canaries_seen": 537,
+        "flagged_chunks": 37
+      },
+      "exec": {
+        "queries": 200,
+        "errors": 0,
+        "latency_ms": {
+          "p50": 24.28,
+          "p95": 26.45,
+          "p99": 27.85,
+          "mean": 25.33
+        },
+        "retrieval_ms": {
+          "p50": 19.18,
+          "p95": 21.21,
+          "p99": 22.69,
+          "mean": 20.26
+        },
+        "canary_leaks": 0,
+        "authorized_canaries_seen": 556,
+        "flagged_chunks": 11
+      }
+    },
+    "latency_ms": {
+      "p50": 25.55,
+      "p95": 28.72,
+      "p99": 33.22,
+      "mean": 25.7
+    },
+    "retrieval_ms": {
+      "p50": 20.44,
+      "p95": 23.32,
+      "p99": 27.2,
+      "mean": 20.54
+    },
+    "canary_leaks": 0,
+    "leak_examples": []
+  }
+}

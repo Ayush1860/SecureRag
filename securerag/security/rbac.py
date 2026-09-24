@@ -37,3 +37,76 @@ def authorize(user_role: str, metadata: dict) -> bool:
 
 # Every department referenced by some role. Ingestion rejects documents labelled with anything else.
 DEPARTMENTS: frozenset[str] = frozenset(d for policy in ROLE_POLICY.values() for d in policy["departments"])
+
+
+# ---------------------------------------------------------------------------------------
+# Partitions: every chunk lives in exactly one (department, clearance) partition. Dense and
+# sparse indexes are physically split by partition, so a role's query only ever touches the
+# partitions its policy allows.
+# ---------------------------------------------------------------------------------------
+
+def partition_name(department: str, clearance: str) -> str:
+    if department not in DEPARTMENTS or clearance not in CLEARANCE_LEVELS:
+        raise ValueError(f"invalid partition labels: {department!r}/{clearance!r}")
+    return f"{department}.{clearance}"
+
+
+def all_partitions() -> list[str]:
+    return [partition_name(d, c) for d in sorted(DEPARTMENTS) for c in CLEARANCE_LEVELS]
+
+
+def partitions_for_filter(where: dict | None) -> list[str]:
+    """Partitions matching a Chroma-style RBAC filter ({"$and": [{"department": {"$in": ...}}, ...]}).
+
+    Fails closed: a filter this function does not understand yields no partitions.
+    """
+    if not where:
+        return all_partitions()
+    departments: set[str] | None = None
+    clearances: set[str] | None = None
+    for cond in where.get("$and", [where]):
+        if not isinstance(cond, dict):
+            return []
+        for field, value in cond.items():
+            if isinstance(value, dict) and set(value) == {"$in"}:
+                allowed = set(value["$in"])
+            elif isinstance(value, str):
+                allowed = {value}
+            else:
+                return []
+            if field == "department":
+                departments = allowed if departments is None else departments & allowed
+            elif field == "clearance":
+                clearances = allowed if clearances is None else clearances & allowed
+            else:
+                return []
+    departments = (departments if departments is not None else set(DEPARTMENTS)) & set(DEPARTMENTS)
+    clearances = (clearances if clearances is not None else set(CLEARANCE_LEVELS)) & set(CLEARANCE_LEVELS)
+    return [partition_name(d, c) for d in sorted(departments) for c in sorted(clearances)]
+
+
+def partitions_for_role(user_role: str) -> list[str]:
+    return partitions_for_filter(build_chroma_filter(user_role))
+
+
+def metadata_matches_filter(metadata: dict, where: dict | None) -> bool:
+    """Evaluate a Chroma-style RBAC filter against chunk metadata. Unknown operators fail closed."""
+    if not where:
+        return True
+    for cond in where.get("$and", [where]):
+        if not isinstance(cond, dict):
+            return False
+        for key, value in cond.items():
+            actual = metadata.get(key)
+            if isinstance(value, dict):
+                if set(value) == {"$in"}:
+                    if actual not in value["$in"]:
+                        return False
+                elif set(value) == {"$eq"}:
+                    if actual != value["$eq"]:
+                        return False
+                else:
+                    return False
+            elif actual != value:
+                return False
+    return True

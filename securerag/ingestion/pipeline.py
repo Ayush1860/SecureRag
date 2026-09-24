@@ -26,6 +26,7 @@ from securerag.ingestion.chunker import LengthFn, TextChunk, chunk_text, whitesp
 from securerag.ingestion.loaders import LoaderError, load_file, supported_extensions
 from securerag.ingestion.metadata import MANIFEST_NAME, DocLabels, MetadataError, MetadataResolver, is_sidecar
 from securerag.ingestion.state import STATUS_FAILED, STATUS_INDEXED, STATUS_REJECTED, IngestState
+from securerag.retrieval import sparse
 from securerag.retrieval.embedder import model_max_tokens, token_length_fn
 from securerag.retrieval.vector_store import VectorStore
 from securerag.security.encryption import INDEX_KEY_LABEL, VectorStoreEncryptor, keyed_hash
@@ -63,6 +64,7 @@ class IngestReport:
     chunks_written: int = 0
     chunks_deleted: int = 0
     injection_flagged_chunks: int = 0
+    sparse_partitions_rebuilt: int = 0
     max_chunk_tokens: int = 0
     elapsed_s: float = 0.0
     rejected_examples: list[str] = field(default_factory=list)
@@ -118,6 +120,7 @@ class IngestPipeline:
         state: IngestState | None,
         encoder: Any = None,
         length_fn: LengthFn | None = None,
+        sparse_dir: str | Path | None = None,
     ):
         self.settings = settings
         self.encryptor = encryptor
@@ -125,6 +128,9 @@ class IngestPipeline:
         self.state = state
         self.encoder = encoder
         self.index_key = encryptor.derive_subkey(INDEX_KEY_LABEL)
+        self.sparse_dir = Path(sparse_dir) if sparse_dir else None
+        self.hasher = sparse.TermHasher(encryptor.derive_subkey(sparse.SPARSE_KEY_LABEL))
+        self._touched: set[str] = set()
 
         if length_fn is None:
             tokenizer = getattr(encoder, "tokenizer", None)
@@ -148,6 +154,7 @@ class IngestPipeline:
         report = IngestReport(run_id=run_id or uuid.uuid4().hex[:12], data_dir=str(root), dry_run=dry_run,
                               full_rebuild=full_rebuild, max_chunk_tokens=self.max_tokens)
         started = time.perf_counter()
+        self._touched = set()
         if not dry_run:
             if self.store is None or self.state is None:
                 raise IngestError("store and state are required unless dry_run=True")
@@ -181,6 +188,8 @@ class IngestPipeline:
             logger.warning("full rebuild: wiping vector store and ingestion state")
             self.store.reset()
             self.state.reset()
+            if self.sparse_dir is not None:
+                sparse.wipe(self.sparse_dir)
 
         identity = self._store_identity()
         info = self.store.get_info()
@@ -290,6 +299,25 @@ class IngestPipeline:
             self._flush(buffer, root_key, report)
 
         self._delete_missing(root_key, seen, report, dry_run)
+        if not dry_run:
+            self._rebuild_sparse(report)
+
+    def _note_partition(self, doc_id: str) -> None:
+        """Remember the partition a document currently lives in (before its state changes)."""
+        prev = self.state.get(doc_id) if self.state is not None else None
+        if prev is not None and prev.department and prev.clearance:
+            self._touched.add(sparse.partition_name(prev.department, prev.clearance))
+
+    def _rebuild_sparse(self, report: IngestReport) -> None:
+        if self.sparse_dir is None or self.state is None:
+            return
+        on_disk = set(sparse.SparseRetriever(self.sparse_dir, self.hasher).available_partitions())
+        # Also rebuild partitions the state knows about but whose index is missing (e.g. deleted by hand).
+        todo = self._touched | (self.state.partitions() - on_disk)
+        if todo:
+            counts = sparse.rebuild_partitions(self.sparse_dir, todo, self.state.partition_terms)
+            report.sparse_partitions_rebuilt = len(counts)
+        self._touched = set()
 
     # ------------------------------------------------------------------ writes
     def _flush(self, docs: list[_Prepared], root_key: str, report: IngestReport) -> None:
@@ -327,9 +355,14 @@ class IngestPipeline:
                 })
             # Record ownership of the new IDs before writing them, so a crash can never orphan chunks.
             new_ids_by_doc: dict[str, list[str]] = {}
+            claims = []
             for (doc, chunk), cid in zip(rows, ids):
+                assert doc.labels is not None
                 new_ids_by_doc.setdefault(doc.cand.doc_id, []).append(cid)
-            self.state.claim_chunks({d: [(cid, i, key_id) for i, cid in enumerate(c)] for d, c in new_ids_by_doc.items()})
+                claims.append((cid, doc.cand.doc_id, chunk.index, key_id,
+                               sparse.partition_name(doc.labels.department, doc.labels.clearance),
+                               self.hasher.encode_text(chunk.text)))
+            self.state.claim_chunks(claims)
             self.store.upsert(ids, embeddings, payloads, metadatas)
             report.chunks_written += len(ids)
         else:
@@ -337,6 +370,8 @@ class IngestPipeline:
 
         for doc in docs:
             assert doc.labels is not None and doc.fingerprint is not None
+            self._note_partition(doc.cand.doc_id)
+            self._touched.add(sparse.partition_name(doc.labels.department, doc.labels.clearance))
             new_ids = new_ids_by_doc.get(doc.cand.doc_id, [])
             keep = set(new_ids)
             stale = [cid for cid in self.state.chunk_ids(doc.cand.doc_id) if cid not in keep]
@@ -345,8 +380,7 @@ class IngestPipeline:
                 report.chunks_deleted += len(stale)
             self.state.mark_indexed(
                 doc_id=doc.cand.doc_id, root=root_key, path=doc.cand.rel, file_hash=doc.fingerprint,
-                department=doc.labels.department, clearance=doc.labels.clearance,
-                chunks=[(cid, i, self.encryptor.key_id) for i, cid in enumerate(new_ids)])
+                department=doc.labels.department, clearance=doc.labels.clearance, chunk_ids=new_ids)
 
     def _unindex(self, prep: _Prepared, root_key: str, report: IngestReport, dry_run: bool) -> None:
         if prep.status == STATUS_REJECTED:
@@ -360,6 +394,7 @@ class IngestPipeline:
         if dry_run or self.state is None or self.store is None:
             return
         # A previously indexed document that is now unlabelled or unreadable must disappear.
+        self._note_partition(prep.cand.doc_id)
         old = self.state.chunk_ids(prep.cand.doc_id)
         if old:
             self.store.delete(old)
@@ -378,6 +413,7 @@ class IngestPipeline:
             report.chunks_deleted += len(old)
             logger.info("source removed, deleting %d chunks: %s", len(old), rel)
             if not dry_run and self.store is not None:
+                self._note_partition(doc_id)
                 if old:
                     self.store.delete(old)
                 self.state.delete_doc(doc_id)

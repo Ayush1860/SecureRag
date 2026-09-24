@@ -37,7 +37,9 @@ CREATE TABLE IF NOT EXISTS chunks (
     chunk_id    TEXT PRIMARY KEY,
     doc_id      TEXT NOT NULL,
     chunk_index INTEGER NOT NULL,
-    key_id      TEXT NOT NULL
+    key_id      TEXT NOT NULL,
+    partition   TEXT,
+    terms       BLOB
 );
 CREATE INDEX IF NOT EXISTS chunks_doc ON chunks(doc_id);
 CREATE INDEX IF NOT EXISTS chunks_key ON chunks(key_id);
@@ -75,7 +77,15 @@ class IngestState:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.executescript(SCHEMA)
+        self._migrate()
+        self._conn.execute("CREATE INDEX IF NOT EXISTS chunks_partition ON chunks(partition)")
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        columns = {row[1] for row in self._conn.execute("PRAGMA table_info(chunks)")}
+        for name, decl in (("partition", "TEXT"), ("terms", "BLOB")):
+            if name not in columns:
+                self._conn.execute(f"ALTER TABLE chunks ADD COLUMN {name} {decl}")
 
     def close(self) -> None:
         self._conn.close()
@@ -115,24 +125,42 @@ class IngestState:
         return list(self._conn.execute("SELECT doc_id, path FROM documents WHERE root = ?", (root,)))
 
     def mark_indexed(self, *, doc_id: str, root: str, path: str, file_hash: str, department: str,
-                     clearance: str, chunks: list[tuple[str, int, str]]) -> None:
-        """Record a fully written document. ``chunks`` is a list of (chunk_id, chunk_index, key_id)."""
+                     clearance: str, chunk_ids: list[str]) -> None:
+        """Record a fully written document whose current chunks are ``chunk_ids`` (already claimed).
+
+        Any other chunk rows the document still owns (stale versions) are dropped.
+        """
+        keep = set(chunk_ids)
         with self.transaction() as c:
-            c.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
-            c.executemany("INSERT OR REPLACE INTO chunks(chunk_id, doc_id, chunk_index, key_id) VALUES(?, ?, ?, ?)",
-                          [(cid, doc_id, idx, key_id) for cid, idx, key_id in chunks])
-            self._upsert_doc(c, doc_id, root, path, file_hash, STATUS_INDEXED, len(chunks), department, clearance, None)
+            owned = [r[0] for r in c.execute("SELECT chunk_id FROM chunks WHERE doc_id = ?", (doc_id,))]
+            c.executemany("DELETE FROM chunks WHERE chunk_id = ?", [(cid,) for cid in owned if cid not in keep])
+            self._upsert_doc(c, doc_id, root, path, file_hash, STATUS_INDEXED, len(chunk_ids), department, clearance,
+                             None)
 
-    def claim_chunks(self, chunks_by_doc: dict[str, list[tuple[str, int, str]]]) -> None:
-        """Add chunk ownership rows before the chunks are written to the store.
+    def claim_chunks(self, rows: list[tuple[str, str, int, str, str, bytes]]) -> None:
+        """Record (chunk_id, doc_id, chunk_index, key_id, partition, terms) before writing to the store.
 
-        Until ``mark_indexed`` replaces them, a document owns the union of its old and new chunks,
-        so a crash between the store write and ``mark_indexed`` never leaves untracked chunks.
+        Until ``mark_indexed`` runs, a document owns the union of its old and new chunks, so a crash
+        between the store write and ``mark_indexed`` never leaves chunks the state DB doesn't know.
         """
         with self.transaction() as c:
-            c.executemany("INSERT OR IGNORE INTO chunks(chunk_id, doc_id, chunk_index, key_id) VALUES(?, ?, ?, ?)",
-                          [(cid, doc_id, idx, key_id) for doc_id, rows in chunks_by_doc.items()
-                           for cid, idx, key_id in rows])
+            c.executemany(
+                "INSERT INTO chunks(chunk_id, doc_id, chunk_index, key_id, partition, terms) VALUES(?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(chunk_id) DO UPDATE SET doc_id=excluded.doc_id, chunk_index=excluded.chunk_index, "
+                "key_id=excluded.key_id, partition=excluded.partition, terms=excluded.terms", rows)
+
+    def partition_terms(self, partition: str) -> Iterator[tuple[str, bytes]]:
+        """(chunk_id, hashed-term blob) for every chunk in ``partition``, streamed."""
+        cur = self._conn.execute("SELECT chunk_id, terms FROM chunks WHERE partition = ? ORDER BY chunk_id",
+                                 (partition,))
+        while True:
+            rows = cur.fetchmany(2000)
+            if not rows:
+                return
+            yield from rows
+
+    def partitions(self) -> set[str]:
+        return {r[0] for r in self._conn.execute("SELECT DISTINCT partition FROM chunks WHERE partition IS NOT NULL")}
 
     def mark_unindexed(self, *, doc_id: str, root: str, path: str, status: str, error: str,
                        file_hash: str | None = None) -> None:

@@ -161,3 +161,136 @@ corpus. Phases 2 and 3 address that.
 `pytest -q`: 67 passed (42 before + 25 new). No existing tests were modified.
 
 **Commit:** `feat(ingest): streaming, incremental, multi-format ingestion pipeline`
+
+---
+
+## Phase 2 — Storage layer: no full-corpus decrypt, pluggable vector store
+
+**Goal:** startup cost independent of corpus size, and no corpus plaintext held in memory.
+
+### Scope change: the persistent sparse index moved here from Phase 3
+The old BM25 was built at startup from decrypted text. Removing the startup decrypt (this
+phase's goal) therefore needs a sparse index that doesn't come from plaintext, so Phase 3 item 1
+(`bm25s`, partitioned by `(department, clearance)`, HMAC-hashed terms) is implemented here.
+The configurable dense/sparse candidate pools and concurrent dense ∥ sparse search (Phase 3
+item 2) also came along, because the rewritten retriever needed them anyway. Phase 3 keeps the
+reranker, context token budget and embedding-model docs.
+
+### Added
+- `securerag/retrieval/sparse.py`
+  - Tokenizer: lowercase alphanumeric terms, with stopwords and 1-char tokens removed.
+  - `TermHasher`: `HMAC-SHA256(sparse_key, term)[:8 bytes]`, i.e. 16 hex chars as in the plan.
+    `sparse_key` comes from HKDF over the AES key with its own label (`securerag/sparse-terms/v1`).
+  - `build_partition`: builds an index from hashed terms, writes it to a temp dir, then swaps it in.
+  - `SparseRetriever`: loads partitions lazily, reloads one when its version changes, and only
+    queries the partitions a role's RBAC filter allows. Per-partition IDF is deliberate and
+    commented in the code.
+  - `partitions_for_filter` fails closed: a filter it doesn't understand gives no partitions.
+- `securerag/retrieval/qdrant_store.py`: `QdrantVectorStore` for server (`QDRANT_URL`), local
+  (`QDRANT_PATH`) or `:memory:` mode.
+  - Keyword payload indexes on `department`, `clearance` and `doc_id`.
+  - 32-hex chunk IDs map 1:1 to UUID point IDs.
+  - Chroma-style filters are translated to Qdrant `Filter`s; unknown operators raise.
+  - Store info lives in a tiny `__meta` collection.
+  - Chosen with `VECTOR_BACKEND=qdrant`; the package is an optional extra (`pip install .[qdrant]`).
+- `securerag/retrieval/store.py`: rewritten around `open_serving_stack(settings, encryptor)`, which:
+  - refuses an empty store (`StoreNotReadyError`);
+  - refuses a different `embed_model` (Phase 3 item 5, done here);
+  - refuses a different key id (`StoreKeyError`);
+  - decrypts a random sample of 5 chunks to prove the key, raising `StoreKeyError` on
+    `DecryptionError`;
+  - then builds the retriever.
+  **There is no automatic rebuild anywhere:** `build_store` / `load_store` are gone, and only
+  `scripts/ingest.py --full-rebuild` re-encrypts.
+- `tests/conftest.py`: an offline stack built through the real ingestion pipeline (real Chroma,
+  real sparse index, real AES-GCM) with a bag-of-words `FakeEncoder`.
+- `tests/test_storage.py` (20 tests):
+  - wrong key fails fast with the store untouched;
+  - tampered/undecryptable payload fails;
+  - empty store fails;
+  - model mismatch fails;
+  - no plaintext reachable from retriever, sparse retriever or engine after startup and queries;
+  - no plaintext vocabulary in the on-disk sparse index;
+  - Chroma and Qdrant `:memory:` both pass the same RBAC/answer tests, 4 roles × 2 backends;
+  - dense pre-filter works per backend;
+  - a spy shows a guest query only opens `general.public`;
+  - HMAC BM25 gives the same top-3 IDs **and scores** as plaintext bm25s;
+  - incremental ingest rebuilds only the touched partition;
+  - deleting a partition's last doc removes that partition.
+
+### Changed
+- `Chunk` is now `(id, metadata, score)`, with no plaintext and no ciphertext.
+  `HybridRetriever(store, encoder, sparse, ...)` returns IDs + metadata. It fetches metadata in
+  windows and applies `matches_filter` (post-fusion allow-list, fails closed on unknown operators)
+  before returning.
+- `SecureRAG(store, retriever, encryptor, audit_path)`: `decrypt_sanitize` fetches ciphertext by
+  ID for the authorized top-k only and decrypts it inside the request.
+- Ingestion stores each chunk's partition and hashed terms in the state DB and rebuilds only the
+  partitions touched by a run: new, changed, relabelled (old and new partition), rejected or
+  deleted docs. It also rebuilds partitions whose index is missing on disk.
+  `--full-rebuild` wipes the sparse dir.
+- `state.py`: `chunks.partition` and `chunks.terms` columns (auto-migrated), `mark_indexed` keeps
+  the claimed rows and drops stale ones.
+- Settings: `VECTOR_BACKEND`, `QDRANT_URL`, `QDRANT_PATH`, `QDRANT_API_KEY`, and `SPARSE_DIR`
+  (default `<store>_sparse`).
+- The API lifespan, Streamlit app, evaluation runner and benchmark adapter use `open_serving_stack`.
+- Deps: `rank-bm25` → `bm25s`; `qdrant-client` (optional extra, also in requirements.txt).
+
+### Tests updated on purpose
+- `tests/test_api.py`, `tests/test_pipeline.py`, `tests/test_retrieval.py` built `Chunk(text=...)`
+  over a `MagicMock` collection, and that API no longer exists (the point of this phase). They now
+  use the shared real-pipeline fixture, and every original assertion is kept.
+  `test_pipeline.py` gained a no-plaintext-on-chunks check. `test_retrieval.py` gained per-role
+  "never returns unauthorized chunks", fail-closed filter and partition-mapping tests.
+- `tests/test_evaluation.py` fixture: `build_store` → `run_ingestion(full_rebuild=True)` +
+  `open_serving_stack`. Retrieval-quality thresholds on `data/sample` (Recall@1 ≥ 0.8, Recall@5 ≥ 0.95,
+  MRR ≥ 0.85) still pass with the real model, new chunker and new sparse index.
+
+### Known limitation (for Phase 5)
+- A running API holds an open Chroma collection handle. `ingest --full-rebuild` from another
+  process deletes and recreates the collection, so the server must restart afterwards.
+  Incremental ingests are fine: upsert/delete in place, and sparse partitions reload by version.
+
+### Dense-path performance: what was tried
+- Profiling at 2000 docs showed the dense query dominating retrieval. Chroma evaluates `where`
+  by scanning matching metadata: the exec role's `$and`-of-`$in` filter took **53 ms**, against
+  **1 ms** unfiltered.
+- **Tried one Chroma collection per partition** (mirroring the sparse index) and **dropped it.**
+  With ~15 persistent collections open in one process, chromadb 1.5.9 deterministically broke
+  queries on some collection with `Error creating hnsw segment reader: Nothing found on disk`,
+  even after only `count()` calls. It reproduced in a standalone script, and neither retries nor
+  fresh handles recovered it.
+- **Kept:** a single collection. Each chunk gets a `partition` metadata field, the RBAC filter is
+  sent as one `partition $in [...]` condition, and a filter that allows every partition (exec) is
+  skipped because it's a no-op. Results are still re-checked against the original filter in the
+  store, then by the retriever's post-fusion allow-list, then by the graph's `authorize` node.
+  Exec retrieval at 2000 docs went from 55 ms to 19 ms.
+- Chroma's filtered search is still O(matching rows). For large corpora, use the Qdrant backend
+  (payload-indexed filtered HNSW). Phase 6 measures both.
+- Tests use an in-memory Chroma client with a unique collection prefix per test. A pytest session
+  opening hundreds of `PersistentClient` stores ran into Windows' 512 C-runtime stream limit
+  (`numpy ... _fdopen failed`), and `SharedSystemClient.clear_system_cache()` between tests
+  triggers the same segment corruption. The real on-disk path is still covered by
+  `tests/test_evaluation.py` and the benchmark.
+
+### Results (`reports/scale/phase2_docs_*.md`)
+| Metric | 500 docs | 1000 docs | 2000 docs |
+|---|---|---|---|
+| Engine startup, total (s) | 13.33 | 13.47 | 13.42 |
+| - of which embedding model load (s) | 9.61 | – | 9.76 |
+| - of which store open + key check + retriever (s) | **1.10** | – | **1.10** |
+| Serve peak RSS (MB) | 1,028 | 1,036 | 1,042 |
+| Query p95 (ms) | 25.8 | 28.7 | 40.8 |
+| Retrieval p95 (ms) | 20.3 | 23.3 | 35.3 |
+| Canary leaks | 0 | 0 | 0 |
+
+**Acceptance check:** startup no longer depends on corpus size. The store-dependent part is
+1.10 s at both 500 and 2000 docs, and the rest is the fixed model load. Before, startup decrypted
+every chunk and serve RSS grew with the corpus. Retrieval p95 grows 1.74× for a 4× corpus
+(Phase 3's target is ≤ 2×), against 2.9× before this phase.
+
+### Tests
+`pytest -q`: 95 passed (67 before, minus the replaced MagicMock-based tests, plus 21 storage tests
+and the rewritten pipeline/retrieval/API tests). 3 consecutive full runs were green.
+
+**Commit:** `feat(storage): pluggable vector store, fail-fast key check, ID-only retrieval`

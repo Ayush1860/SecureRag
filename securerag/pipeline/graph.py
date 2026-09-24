@@ -6,6 +6,7 @@ from langgraph.graph import StateGraph, START, END
 
 from securerag.llm.providers import SYSTEM_PROMPT, call_llm
 from securerag.retrieval.hybrid import HybridRetriever, Chunk
+from securerag.retrieval.vector_store import VectorStore
 from securerag.security.audit import audit_event
 from securerag.security.rbac import authorize, build_chroma_filter, validate_role
 from securerag.security.sanitizer import build_safe_context_block, sanitize_chunk
@@ -40,8 +41,8 @@ class SecureRAG:
     6. audit (Immutable JSONL audit trail recording cryptographic hashes)
     """
 
-    def __init__(self, collection, retriever: HybridRetriever, encryptor, audit_path: str):
-        self.collection = collection
+    def __init__(self, store: VectorStore, retriever: HybridRetriever, encryptor, audit_path: str):
+        self.store = store
         self.retriever = retriever
         self.encryptor = encryptor
         self.audit_path = audit_path
@@ -107,8 +108,12 @@ class SecureRAG:
         excerpts = []
         flagged_total = 0
 
+        # Payloads are fetched and decrypted only here, only for this request's authorized top-k.
+        payloads = {cid: ct for cid, ct, _ in self.store.get([h.id for h in authorized])}
         for h in authorized:
-            pt = self.encryptor.decrypt(h.encrypted_text)
+            if h.id not in payloads:
+                continue  # deleted between retrieval and fetch
+            pt = self.encryptor.decrypt(payloads[h.id])
             plaintexts.append(pt)
             _, is_flagged = sanitize_chunk(pt)
             if is_flagged:

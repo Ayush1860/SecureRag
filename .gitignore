@@ -13,3 +13,5 @@ dist/
 data/synthetic/
 data/bench/
 data/*_state.sqlite*
+data/*_sparse/
+data/qdrant*/

@@ -14,9 +14,8 @@ os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
 import streamlit as st
 from dotenv import load_dotenv
 
-from securerag.config import Settings
-from securerag.retrieval.hybrid import HybridRetriever
-from securerag.retrieval.store import load_store
+from securerag.config import get_settings
+from securerag.retrieval.store import open_serving_stack
 from securerag.security.audit import read_recent_audit_events
 from securerag.security.encryption import VectorStoreEncryptor
 from securerag.security.rbac import ROLE_POLICY
@@ -172,14 +171,11 @@ st.markdown(
 @st.cache_resource(show_spinner="Initializing SecureRAG Engine...")
 def get_engine():
     """Initializes and caches the SecureRAG pipeline components."""
-    settings = Settings()
+    settings = get_settings()
     encryptor = VectorStoreEncryptor()
-    client, collection, encoder, chunks = load_store(
-        settings.chroma_dir, settings.data_dir, encryptor
-    )
-    retriever = HybridRetriever(collection, encoder, chunks, fusion_k=settings.fusion_k)
-    engine = SecureRAG(collection, retriever, encryptor, settings.audit_log_path)
-    return engine, collection, settings
+    stack = open_serving_stack(settings, encryptor)
+    engine = SecureRAG(stack.store, stack.retriever, encryptor, settings.audit_log_path)
+    return engine, stack.store, settings
 
 
 engine, collection, settings = get_engine()

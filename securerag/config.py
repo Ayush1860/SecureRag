@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     chroma_dir: str = "./data/chroma_db"
     audit_log_path: str = "./data/audit.jsonl"
     state_db_path: str = Field(default="", description="Ingestion state DB; default <chroma_dir>_state.sqlite")
+    sparse_dir: str = Field(default="", description="Partitioned BM25 indexes; default <chroma_dir>_sparse")
+
+    # Vector store backend
+    vector_backend: Literal["chroma", "qdrant"] = "chroma"
+    qdrant_url: str = ""
+    qdrant_path: str = "./data/qdrant"
+    qdrant_api_key: str = ""
 
     # Retrieval
     top_k: int = Field(default=5, ge=1, le=50)
@@ -56,12 +63,17 @@ class Settings(BaseSettings):
             raise ValueError("chunk_overlap_tokens must be smaller than chunk_size_tokens")
         return self
 
+    def _beside_store(self, suffix: str) -> str:
+        base = Path(self.chroma_dir if self.vector_backend == "chroma" else self.qdrant_path)
+        return str(base.with_name(base.name + suffix))
+
     @property
     def resolved_state_db_path(self) -> str:
-        if self.state_db_path:
-            return self.state_db_path
-        chroma = Path(self.chroma_dir)
-        return str(chroma.with_name(chroma.name + "_state.sqlite"))
+        return self.state_db_path or self._beside_store("_state.sqlite")
+
+    @property
+    def resolved_sparse_dir(self) -> str:
+        return self.sparse_dir or self._beside_store("_sparse")
 
 
 @lru_cache(maxsize=1)
