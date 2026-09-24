@@ -110,6 +110,14 @@ class QdrantVectorStore:
             ]
             self.client.upsert(self.collection_name, points=points, wait=True)
 
+    def update_payloads(self, ids: Sequence[str], payloads: Sequence[str],
+                        metadatas: Sequence[dict[str, Any]]) -> None:
+        if not ids or not self._exists():
+            return
+        for cid, ct, meta in zip(ids, payloads, metadatas):
+            self.client.set_payload(self.collection_name, payload={**meta, "cid": cid, "ct": ct},
+                                    points=[point_id(cid)], wait=True)
+
     def delete(self, ids: Sequence[str]) -> None:
         if not ids or not self._exists():
             return

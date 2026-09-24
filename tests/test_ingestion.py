@@ -9,7 +9,7 @@ from securerag.ingestion.loaders import LoaderError, load_file
 from securerag.ingestion.metadata import MetadataError, MetadataResolver
 from securerag.ingestion.pipeline import IngestError, IngestPipeline
 from securerag.ingestion.state import IngestState
-from securerag.security.encryption import VectorStoreEncryptor
+from securerag.security.encryption import DecryptionError, VectorStoreEncryptor, aad_for
 
 from conftest import make_store
 
@@ -195,7 +195,10 @@ def test_ingest_writes_encrypted_chunks_with_metadata(env):
     for batch in pipeline.store.iter_all():
         for cid, payload, meta in batch:
             assert "sentence" not in payload  # ciphertext only
-            assert "sentence" in env["encryptor"].decrypt(payload)
+            assert payload.startswith(f"v2:{env['encryptor'].key_id}:")
+            assert "sentence" in env["encryptor"].decrypt(payload, aad=aad_for(cid, meta))
+            with pytest.raises(DecryptionError):  # payload is bound to its chunk id + labels
+                env["encryptor"].decrypt(payload)
             for key in ("doc_id", "chunk_index", "content_hash", "source", "department", "clearance",
                         "key_id", "embed_model", "ingested_at", "injection_flagged"):
                 assert key in meta

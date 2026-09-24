@@ -345,3 +345,132 @@ with the same retrieval code; Phase 3 changes only add the optional node and the
 `pytest -q`: 102 passed.
 
 **Commit:** `feat(retrieval): optional cross-encoder rerank node, context token budget, embed prefixes`
+
+---
+
+## Phase 4 — Security hardening
+
+### 1. Authentication (the role no longer comes from the request body)
+- `securerag/security/auth.py`: `Authenticator` with three modes.
+  - `api_key`: `X-API-Key`, keys file stores SHA-256 hashes only.
+  - `jwt`: HS256/RS256, algorithm pinned, `exp`+`sub` required, `aud`/`iss` enforced when set,
+    configurable role claim, HS256 secret ≥ 32 bytes.
+  - `dev`: `X-Dev-Role`, refused at startup unless `ENV=dev`, with a loud warning.
+  Misconfiguration (missing keys file, short secret, dev mode in prod) stops startup with
+  `AuthConfigError`. **Defaults are `ENV=prod` and `AUTH_MODE=api_key`** (secure by default);
+  `.env.example` opts into dev for the local demo.
+- `scripts/create_api_key.py`: generates `srag_…` keys, prints them once, stores only the hash.
+- `app/api.py`:
+  - `QueryRequest` has no `role` and `extra="forbid"`, so a body role is a 422.
+  - The role comes from `Depends(get_principal)`, and the principal ID is passed to the audit log.
+  - New `GET /api/auth/mode` and `GET /api/auth/me`.
+  - `/api/audit` is limited to `AUDIT_READER_ROLES` (default `admin,exec`).
+- New `admin` role: may read the audit log (and run admin jobs in Phase 5) but its policy has no
+  departments, so it sees no documents (separation of duties).
+- React UI: reads `/api/auth/mode`. In dev it keeps the role switcher and sends `X-Dev-Role`.
+  Otherwise it shows a credential panel (API key or JWT, kept in `sessionStorage`), locks the role
+  picker to the server-reported role, and never sends a role in the body.
+- Streamlit: refuses to run unless `ENV=dev`, because its role picker is the identity.
+
+### 2. Encryption: keyring, v2 format, AAD, rotation
+- `encryption.py` rewritten.
+  - `Keyring` sources: `SECURERAG_KEYRING_FILE`, then `SECURERAG_KEYRING` JSON, then the single
+    `SECURERAG_AES_KEY_B64`, then an ephemeral key.
+  - Ciphertext format `v2:<key_id>:<b64(nonce||tag||ct)>`. v1 blobs still decrypt, by trying each
+    key in the ring; `SECURERAG_ALLOW_V1=false` rejects them after migration.
+  - **AAD = `securerag/chunk/v2|chunk_id|department|clearance`** on every chunk payload.
+- **The index key is separate from the active key.** HMAC subkeys for chunk IDs, fingerprints and
+  sparse terms come from the keyring's `index` key, so rotating the encryption key doesn't change
+  IDs or indexes. The store records `index_key_id` (a key fingerprint). For a single-key setup
+  this equals the old key ID, so stores from Phases 1–3 still open.
+- `securerag/security/rotation.py` + `scripts/rotate_key.py`: batch re-encryption under the
+  active key. It resumes via `chunks.key_id` in the state DB, which is updated only after the
+  store write. `--all` also upgrades v1 blobs to v2 + AAD.
+- `VectorStore.update_payloads` was added (Chroma + Qdrant). Chroma's `update()` with documents
+  but no embeddings silently re-embeds with its *default embedding function*, and
+  `embedding_function=None` doesn't stop that in chromadb 1.x. So the stored vectors are fetched
+  and passed back explicitly.
+
+### 3. Injection scanning at ingest
+- `securerag/security/injection.py`: `InjectionDetector` runs the regex heuristics, OR-ed with an
+  optional HF text classifier (`INJECTION_CLASSIFIER`, label and threshold configurable) that runs
+  at ingest only.
+- Query time uses the stored `injection_flagged` metadata. It only re-scans chunks that predate
+  the flag. `build_safe_context_block(chunks, flags)` still wraps flagged chunks.
+
+### 4. Audit log
+- `audit.py` rewritten.
+  - Hash chain: `seq`, `prev_hash`, `entry_hash = sha256(canonical JSON)`.
+  - Cross-process `filelock` for writes, plus fsync.
+  - Size-based rotation to `audit.NNNNN.jsonl`; the chain continues across files.
+  - Tail reads from the end of the file.
+  - `principal_id`, `reranked` and `dropped_for_budget` are recorded.
+  - A pre-chain log from older versions is set aside as `audit.legacy-<ts>.jsonl`.
+- `scripts/verify_audit.py`: prints the first broken `seq`/file/line and exits with 1.
+
+### 5. API hardening
+- CORS comes only from `CORS_ORIGINS` (empty = same-origin), with no credentials, explicit
+  methods and explicit headers.
+- A middleware assigns or validates `X-Request-ID` and turns any unhandled exception into
+  `{"detail": "Internal server error", "request_id": …}`; the traceback goes to the server log only.
+- Body limit: `MAX_REQUEST_BYTES` (413); bodies without `Content-Length` get 411.
+- Per-principal rate limiting (`RATE_LIMIT`, 429). **Deviation:** the plan names slowapi. I used
+  `limits` directly (the library under slowapi) as a FastAPI dependency keyed by the
+  *authenticated principal*, which slowapi's IP-keyed decorators don't do cleanly. Multi-worker
+  deployments can use `RATE_LIMIT_STORAGE=redis://…`.
+
+### 6. SECURITY.md
+Rewritten: invariants, assets, a 14-row threat table (threat → control → residual risk), and
+known limitations, including embedding inversion and HMAC term-frequency analysis.
+
+### 7. Tests
+- `tests/test_api.py` (28):
+  - body role → 422, and spoofing via header/body is impossible with API keys;
+  - wrong, missing or invalid keys → 401;
+  - dev mode refused in prod; missing keys file refused;
+  - JWT valid, plus 8 rejection cases: expired, forged signature, wrong audience, unknown role,
+    no role, no exp, `alg=none`, garbage;
+  - short HS256 secret refused;
+  - generic 500s with no detail leak; 413 on oversized bodies;
+  - per-principal 429; CORS denies foreign origins;
+  - audit readable only by admin/exec; admin sees no documents; `/auth/me`.
+- `tests/test_hardening.py` (16):
+  - v2 format + AAD binding; v1 compatibility and the kill switch;
+  - keyring decrypts old keys, encrypts with the active one, and keeps the index subkeys stable;
+  - bad or unknown key IDs;
+  - **a relabelled chunk fails authentication instead of leaking to guest**; swapped ciphertexts fail;
+  - rotation round trip (IDs and vectors unchanged, state updated, resumable, the rotated store
+    answers queries);
+  - `--all` v1 upgrade;
+  - audit chain catches edited and deleted lines, survives rotation, stays valid with concurrent
+    writers, records the principal and reads from the end;
+  - the `verify_audit.py` exit codes;
+  - query time uses the stored injection flag (spy shows no re-scan); the classifier catches what
+    the regex misses.
+- Updated on purpose: `test_ingestion.py` now decrypts with AAD and asserts that decrypting
+  without it fails. `test_rerank_budget.py`'s encryptor wrapper forwards `aad`.
+
+### Manual end-to-end check
+Real model, `data/sample`, uvicorn on :8765.
+- **Dev mode:**
+  - guest gets no margin, finance_lead gets 34.2%;
+  - body `role` → 422; employee reading audit → 403;
+  - `verify_audit.py` on the live log reports ok;
+  - in the React UI, the finance query answered with the injection quarantined.
+- **`ENV=prod AUTH_MODE=api_key`:**
+  - no key → 401, and `X-Dev-Role: exec` → 401;
+  - a valid finance key via curl → `fiona / finance_lead` (the dev header is ignored);
+  - the UI shows the sign-in panel and a locked role picker.
+  - I didn't type the key into the browser field myself; that's for you to try.
+
+### Results
+`reports/scale/phase4_docs_2000.md`:
+- 0 canary leaks.
+- Retrieval p95 34.4 ms (unchanged).
+- Query p50 43.9 ms, against 37.2 ms in Phase 2. The difference is the fsync'd, locked,
+  hash-chained audit append on every query.
+- Store open + key check 1.16 s.
+
+`pytest -q`: 139 passed.
+
+**Commit:** `feat(security): authenticated roles, keyring with AAD and rotation, hash-chained audit, API hardening`

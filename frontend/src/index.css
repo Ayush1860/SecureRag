@@ -831,3 +831,37 @@ body {
   color: var(--text-primary);
   background: rgba(255, 255, 255, 0.08);
 }
+
+/* Credential panel (AUTH_MODE=api_key / jwt) */
+.panel-note {
+  display: block;
+  font-size: 0.8rem;
+  color: #94a3b8;
+  margin: 6px 0;
+}
+.panel-note code {
+  font-family: 'JetBrains Mono', monospace;
+  color: #22d3ee;
+}
+.query-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(15, 23, 42, 0.6);
+  color: #e2e8f0;
+  font-family: 'JetBrains Mono', monospace;
+}
+.error-banner {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+  font-size: 0.8rem;
+}
+.role-card-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

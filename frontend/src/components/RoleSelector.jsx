@@ -6,6 +6,7 @@ const ROLE_ICONS = {
   employee: Briefcase,
   finance_lead: Lock,
   exec: Key,
+  admin: Shield,
 };
 
 const ROLE_DISPLAY_NAMES = {
@@ -13,6 +14,7 @@ const ROLE_DISPLAY_NAMES = {
   employee: 'Internal Employee',
   finance_lead: 'Finance Lead',
   exec: 'Executive Officer',
+  admin: 'Administrator (no document access)',
 };
 
 const CLEARANCE_LEVELS = {
@@ -21,7 +23,7 @@ const CLEARANCE_LEVELS = {
   confidential: { label: 'CONFIDENTIAL', class: 'pill-confidential' },
 };
 
-export default function RoleSelector({ currentRole, onSelectRole, rolePolicies }) {
+export default function RoleSelector({ currentRole, onSelectRole, rolePolicies, locked = false }) {
   const currentPolicy = rolePolicies[currentRole] || {
     max_clearance: 'internal',
     departments: ['general', 'engineering', 'hr'],
@@ -39,7 +41,7 @@ export default function RoleSelector({ currentRole, onSelectRole, rolePolicies }
           <Shield size={18} className="text-cyan" />
           <span>Identity & Clearance (RBAC)</span>
         </div>
-        <span className="security-tag tag-cyan">Zero-Trust</span>
+        <span className="security-tag tag-cyan">{locked ? 'From credential' : 'Dev role switcher'}</span>
       </div>
 
       <div className="role-grid">
@@ -56,7 +58,9 @@ export default function RoleSelector({ currentRole, onSelectRole, rolePolicies }
               key={roleKey}
               type="button"
               className={`role-card-btn ${isActive ? 'active' : ''}`}
-              onClick={() => onSelectRole(roleKey)}
+              disabled={locked && !isActive}
+              title={locked ? 'Your role comes from your credential' : undefined}
+              onClick={() => !locked && onSelectRole(roleKey)}
               aria-label={`Select role ${roleKey}`}
             >
               <div className="role-card-top">

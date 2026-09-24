@@ -7,6 +7,8 @@ ROLE_POLICY = {
     "employee": {"max_clearance": "internal", "departments": ["general", "engineering", "hr"]},
     "finance_lead": {"max_clearance": "confidential", "departments": ["general", "finance"]},
     "exec": {"max_clearance": "confidential", "departments": ["general", "engineering", "hr", "finance", "exec"]},
+    # Operators: may read the audit log and run admin jobs, but see no documents (separation of duties).
+    "admin": {"max_clearance": "public", "departments": []},
 }
 
 class AccessControlError(ValueError):

@@ -16,9 +16,26 @@ import TelemetryHUD from './components/TelemetryHUD';
 import AnswerPanel from './components/AnswerPanel';
 import SecurityInspector from './components/SecurityInspector';
 import AuditTrailModal from './components/AuditTrailModal';
+import CredentialPanel from './components/CredentialPanel';
+
+const CREDENTIAL_KEY = 'securerag.credential';
+
+function readCredential() {
+  try {
+    return sessionStorage.getItem(CREDENTIAL_KEY) || '';
+  } catch {
+    return '';
+  }
+}
 
 export default function App() {
   const [currentRole, setCurrentRole] = useState('employee');
+  // Authentication: in AUTH_MODE=dev the role picker sets X-Dev-Role; otherwise the role comes
+  // from the API key / JWT and the picker is locked to it.
+  const [authMode, setAuthMode] = useState('dev');
+  const [credential, setCredential] = useState(readCredential);
+  const [principal, setPrincipal] = useState(null);
+  const [authError, setAuthError] = useState(null);
   const [rolePolicies, setRolePolicies] = useState({
     guest: { max_clearance: 'public', departments: ['general'] },
     employee: { max_clearance: 'internal', departments: ['general', 'engineering', 'hr'] },
@@ -41,12 +58,59 @@ export default function App() {
   const [auditLogs, setAuditLogs] = useState([]);
   const [auditLoading, setAuditLoading] = useState(false);
 
-  // Fetch backend status & roles on mount
+  const authHeaders = (cred = credential, role = currentRole) => {
+    if (authMode === 'dev') return { 'X-Dev-Role': role };
+    if (!cred) return {};
+    return authMode === 'jwt' ? { Authorization: `Bearer ${cred}` } : { 'X-API-Key': cred };
+  };
+
+  // Fetch backend status, auth mode & roles on mount
   useEffect(() => {
     checkHealth();
     fetchRoles();
-    fetchAuditTrail();
+    fetch('/api/auth/mode')
+      .then((r) => (r.ok ? r.json() : { mode: 'api_key' }))
+      .then((data) => setAuthMode(data.mode))
+      .catch(() => setAuthMode('api_key'));
   }, []);
+
+  useEffect(() => {
+    if (authMode !== 'dev' && credential) signIn(credential);
+    if (authMode === 'dev') fetchAuditTrail();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authMode]);
+
+  const signIn = async (cred) => {
+    setAuthError(null);
+    try {
+      const res = await fetch('/api/auth/me', { headers: authHeaders(cred) });
+      if (!res.ok) throw new Error('Credential rejected');
+      const me = await res.json();
+      try {
+        sessionStorage.setItem(CREDENTIAL_KEY, cred);
+      } catch {
+        /* storage unavailable: keep it in memory only */
+      }
+      setCredential(cred);
+      setPrincipal(me);
+      setCurrentRole(me.role);
+    } catch (err) {
+      setPrincipal(null);
+      setAuthError(err.message);
+    }
+  };
+
+  const signOut = () => {
+    try {
+      sessionStorage.removeItem(CREDENTIAL_KEY);
+    } catch {
+      /* ignore */
+    }
+    setCredential('');
+    setPrincipal(null);
+    setResultData(null);
+    setAuditLogs([]);
+  };
 
   const checkHealth = async () => {
     try {
@@ -78,10 +142,12 @@ export default function App() {
   const fetchAuditTrail = async () => {
     setAuditLoading(true);
     try {
-      const res = await fetch('/api/audit?limit=25');
+      const res = await fetch('/api/audit?limit=25', { headers: authHeaders() });
       if (res.ok) {
         const logs = await res.json();
         setAuditLogs(logs);
+      } else {
+        setAuditLogs([]);
       }
     } catch (err) {
       console.error('Failed to fetch audit trail:', err);
@@ -101,10 +167,10 @@ export default function App() {
     try {
       const res = await fetch('/api/query', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        // No role in the body: the server derives it from the authenticated principal.
         body: JSON.stringify({
           query: cleanQuery,
-          role: currentRole,
           top_k: parseInt(topK, 10),
         }),
       });
@@ -126,7 +192,7 @@ export default function App() {
   };
 
   const handleSelectPreset = (preset) => {
-    if (preset.role) setCurrentRole(preset.role);
+    if (preset.role && authMode === 'dev') setCurrentRole(preset.role);
     setQuery(preset.query);
   };
 
@@ -189,10 +255,20 @@ export default function App() {
       <main className="main-content">
         {/* Left Column: Role Selector & Scenario Presets */}
         <aside className="sidebar-col">
+          {authMode !== 'dev' && (
+            <CredentialPanel
+              authMode={authMode}
+              principal={principal}
+              onSubmit={signIn}
+              onSignOut={signOut}
+              error={authError}
+            />
+          )}
           <RoleSelector
             currentRole={currentRole}
             onSelectRole={setCurrentRole}
             rolePolicies={rolePolicies}
+            locked={authMode !== 'dev'}
           />
 
           <PresetQueries onSelectPreset={handleSelectPreset} />

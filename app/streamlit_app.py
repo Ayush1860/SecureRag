@@ -178,6 +178,13 @@ def get_engine():
     return engine, stack.store, settings
 
 
+if get_settings().env != "dev":
+    # The Streamlit demo has no authentication: its role picker IS the identity. It must never be
+    # exposed as a real interface, so it only runs in ENV=dev.
+    st.error("The Streamlit demo runs only with ENV=dev (it has no authentication). "
+             "Use the API + React UI with AUTH_MODE=api_key or jwt for anything else.")
+    st.stop()
+
 engine, collection, settings = get_engine()
 
 # Initialize session state for query inputs
@@ -291,7 +298,8 @@ with st.container():
 if execute_clicked and query_text.strip():
     with st.spinner("Orchestrating LangGraph retrieval & verification pipeline..."):
         try:
-            res = engine.query(query_text, user_role=st.session_state.active_role, top_k=top_k)
+            res = engine.query(query_text, user_role=st.session_state.active_role, top_k=top_k,
+                               principal_id=f"streamlit-dev:{st.session_state.active_role}")
             st.session_state.last_result = res
         except Exception as e:
             st.error(f"Execution Error: {e}")

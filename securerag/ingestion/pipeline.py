@@ -29,8 +29,8 @@ from securerag.ingestion.state import STATUS_FAILED, STATUS_INDEXED, STATUS_REJE
 from securerag.retrieval import sparse
 from securerag.retrieval.embedder import model_max_tokens, token_length_fn
 from securerag.retrieval.vector_store import VectorStore
-from securerag.security.encryption import INDEX_KEY_LABEL, VectorStoreEncryptor, keyed_hash
-from securerag.security.sanitizer import flag_suspicious
+from securerag.security.encryption import INDEX_KEY_LABEL, VectorStoreEncryptor, chunk_aad, keyed_hash
+from securerag.security.injection import InjectionDetector
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +121,7 @@ class IngestPipeline:
         encoder: Any = None,
         length_fn: LengthFn | None = None,
         sparse_dir: str | Path | None = None,
+        injection_detector: InjectionDetector | None = None,
     ):
         self.settings = settings
         self.encryptor = encryptor
@@ -129,6 +130,7 @@ class IngestPipeline:
         self.encoder = encoder
         self.index_key = encryptor.derive_subkey(INDEX_KEY_LABEL)
         self.sparse_dir = Path(sparse_dir) if sparse_dir else None
+        self.detector = injection_detector or InjectionDetector()
         self.hasher = sparse.TermHasher(encryptor.derive_subkey(sparse.SPARSE_KEY_LABEL))
         self._touched: set[str] = set()
 
@@ -179,7 +181,7 @@ class IngestPipeline:
 
     # ------------------------------------------------------------------ setup
     def _store_identity(self) -> dict[str, str]:
-        return {"embed_model": self.settings.embed_model, "index_key_id": self.encryptor.key_id,
+        return {"embed_model": self.settings.embed_model, "index_key_id": self.encryptor.index_key_id,
                 "chunker": f"{CHUNKER_VERSION}:{self.max_tokens}:{self.overlap}"}
 
     def _prepare_store(self, full_rebuild: bool) -> None:
@@ -329,13 +331,15 @@ class IngestPipeline:
                                              normalize_embeddings=True, convert_to_numpy=True,
                                              show_progress_bar=False)
             now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            injection_flags = self.detector.flags([chunk.text for _, chunk in rows])
             key_id = self.encryptor.key_id
             ids, payloads, metadatas = [], [], []
-            for doc, chunk in rows:
+            for (doc, chunk), flagged in zip(rows, injection_flags):
                 assert doc.labels is not None
-                ids.append(keyed_hash(self.index_key, doc.cand.doc_id, str(chunk.index), chunk.text))
-                payloads.append(self.encryptor.encrypt(chunk.text))
-                flagged = bool(flag_suspicious(chunk.text))
+                cid = keyed_hash(self.index_key, doc.cand.doc_id, str(chunk.index), chunk.text)
+                ids.append(cid)
+                payloads.append(self.encryptor.encrypt(
+                    chunk.text, aad=chunk_aad(cid, doc.labels.department, doc.labels.clearance)))
                 report.injection_flagged_chunks += int(flagged)
                 metadatas.append({
                     "doc_id": doc.cand.doc_id,

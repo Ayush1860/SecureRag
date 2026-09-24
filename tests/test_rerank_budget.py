@@ -24,8 +24,8 @@ class CountingEncryptor:
         self.inner = inner
         self.decrypted: list[str] = []
 
-    def decrypt(self, blob):
-        pt = self.inner.decrypt(blob)
+    def decrypt(self, blob, aad=None):
+        pt = self.inner.decrypt(blob, aad=aad)
         self.decrypted.append(pt)
         return pt
 

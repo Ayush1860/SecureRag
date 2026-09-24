@@ -61,14 +61,44 @@ class Settings(BaseSettings):
     chunk_overlap_tokens: int = Field(default=60, ge=0)
     ingest_batch_size: int = Field(default=512, ge=1)
 
+    # Ingest-time prompt-injection classifier (optional; regex heuristics always run)
+    injection_classifier: str = ""
+    injection_label: str = "INJECTION"
+    injection_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+
     # Generation
     llm_provider: str = "mock"
+
+    # Deployment / API security
+    env: Literal["dev", "prod"] = "prod"
+    auth_mode: Literal["api_key", "jwt", "dev"] = "api_key"
+    api_keys_file: str = "./data/api_keys.json"
+    jwt_algorithm: Literal["HS256", "RS256"] = "HS256"
+    jwt_secret: str = ""
+    jwt_public_key_file: str = ""
+    jwt_audience: str = ""
+    jwt_issuer: str = ""
+    jwt_role_claim: str = "role"
+    jwt_leeway_seconds: int = Field(default=30, ge=0, le=300)
+    cors_origins: str = Field(default="", description="Comma-separated allowed origins; empty = same-origin only")
+    max_request_bytes: int = Field(default=16_384, ge=1024)
+    rate_limit: str = "60/minute"
+    rate_limit_storage: str = "memory://"
+    audit_reader_roles: str = "admin,exec"
 
     @model_validator(mode="after")
     def _check(self) -> "Settings":
         if self.chunk_overlap_tokens >= self.chunk_size_tokens:
             raise ValueError("chunk_overlap_tokens must be smaller than chunk_size_tokens")
         return self
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip() and o.strip() != "*"]
+
+    @property
+    def audit_reader_role_set(self) -> set[str]:
+        return {r.strip() for r in self.audit_reader_roles.split(",") if r.strip()}
 
     def _beside_store(self, suffix: str) -> str:
         base = Path(self.chroma_dir if self.vector_backend == "chroma" else self.qdrant_path)

@@ -27,6 +27,11 @@ class VectorStore(Protocol):
     def upsert(self, ids: Sequence[str], embeddings: Sequence[Sequence[float]], payloads: Sequence[str],
                metadatas: Sequence[dict[str, Any]]) -> None: ...
 
+    def update_payloads(self, ids: Sequence[str], payloads: Sequence[str],
+                        metadatas: Sequence[dict[str, Any]]) -> None:
+        """Replace ciphertext + metadata of existing chunks, keeping their vectors (key rotation)."""
+        ...
+
     def delete(self, ids: Sequence[str]) -> None: ...
 
     def query(self, embedding: Sequence[float], n: int, where: dict[str, Any] | None = None) -> list[tuple[str, float]]: ...
@@ -96,6 +101,21 @@ class ChromaVectorStore:
         for s, e in _batches(len(ids), self.max_batch):
             metas = [{**m, "partition": partition_name(m["department"], m["clearance"])} for m in metadatas[s:e]]
             self._write(list(ids[s:e]), [list(map(float, v)) for v in embeddings[s:e]], list(payloads[s:e]), metas)
+
+    def update_payloads(self, ids: Sequence[str], payloads: Sequence[str],
+                        metadatas: Sequence[dict[str, Any]]) -> None:
+        for s, e in _batches(len(ids), self.max_batch):
+            batch_ids = list(ids[s:e])
+            # Pass the stored vectors back explicitly: given documents without embeddings, Chroma would
+            # run its default embedding function over the ciphertext.
+            current = self.collection.get(ids=batch_ids, include=["embeddings"])
+            vectors = dict(zip(current["ids"], current["embeddings"]))
+            keep = [i for i, cid in enumerate(batch_ids) if cid in vectors]
+            metas = [{**metadatas[s + i], "partition": partition_name(metadatas[s + i]["department"],
+                                                                       metadatas[s + i]["clearance"])} for i in keep]
+            self.collection.update(ids=[batch_ids[i] for i in keep],
+                                   embeddings=[list(map(float, vectors[batch_ids[i]])) for i in keep],
+                                   documents=[payloads[s + i] for i in keep], metadatas=metas)
 
     def delete(self, ids: Sequence[str]) -> None:
         for s, e in _batches(len(ids), self.max_batch):

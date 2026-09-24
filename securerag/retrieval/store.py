@@ -20,7 +20,7 @@ from securerag.retrieval.embedder import get_encoder
 from securerag.retrieval.hybrid import HybridRetriever
 from securerag.retrieval.sparse import SPARSE_KEY_LABEL, SparseRetriever, TermHasher
 from securerag.retrieval.vector_store import COLLECTION_NAME, ChromaVectorStore, VectorStore
-from securerag.security.encryption import INDEX_KEY_LABEL, DecryptionError, VectorStoreEncryptor
+from securerag.security.encryption import INDEX_KEY_LABEL, DecryptionError, VectorStoreEncryptor, aad_for
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +65,11 @@ def run_ingestion(
         store = open_vector_store(settings)
     state = IngestState(settings.resolved_state_db_path)
     try:
+        from securerag.security.injection import detector_from_settings
+
         pipeline = IngestPipeline(settings, encryptor, store, state, encoder=encoder,
-                                  sparse_dir=settings.resolved_sparse_dir)
+                                  sparse_dir=settings.resolved_sparse_dir,
+                                  injection_detector=detector_from_settings(settings))
         return pipeline.run(data_dir or settings.data_dir, full_rebuild=full_rebuild, dry_run=dry_run,
                             workers=workers, progress=progress, run_id=run_id)
     finally:
@@ -84,13 +87,13 @@ def verify_store(store: VectorStore, encryptor: VectorStoreEncryptor, settings: 
         raise StoreNotReadyError(
             f"store was built with embed_model={info['embed_model']!r} but EMBED_MODEL={settings.embed_model!r}; "
             "query vectors would be meaningless. Re-ingest with --full-rebuild or restore the setting.")
-    if info.get("index_key_id") and info["index_key_id"] != encryptor.key_id:
+    if info.get("index_key_id") and info["index_key_id"] != encryptor.index_key_id:
         raise StoreKeyError(
-            f"store was encrypted with key id {info['index_key_id']} but the configured key is {encryptor.key_id}. "
-            "Set the original SECURERAG_AES_KEY_B64, or re-ingest with --full-rebuild.")
-    for cid, ciphertext, _ in store.get(store.sample_ids(min(sample, count))):
+            f"store was indexed under key {info['index_key_id']} but the configured index key is "
+            f"{encryptor.index_key_id}. Configure the original key (or keyring), or re-ingest with --full-rebuild.")
+    for cid, ciphertext, meta in store.get(store.sample_ids(min(sample, count))):
         try:
-            encryptor.decrypt(ciphertext)
+            encryptor.decrypt(ciphertext, aad=aad_for(cid, meta))
         except DecryptionError as exc:
             raise StoreKeyError(
                 f"chunk {cid} failed AES-GCM authentication with the configured key. Either the key is wrong or "

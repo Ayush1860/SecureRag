@@ -10,6 +10,7 @@ from securerag.retrieval.hybrid import HybridRetriever, Chunk
 from securerag.retrieval.rerank import Reranker
 from securerag.retrieval.vector_store import VectorStore
 from securerag.security.audit import audit_event
+from securerag.security.encryption import aad_for
 from securerag.security.rbac import authorize, build_chroma_filter, validate_role
 from securerag.security.sanitizer import build_safe_context_block, sanitize_chunk
 
@@ -17,6 +18,7 @@ from securerag.security.sanitizer import build_safe_context_block, sanitize_chun
 class RAGState(TypedDict, total=False):
     query: str
     user_role: str
+    principal_id: str
     request_id: str
     top_k: int
     retrieved: list[Chunk]
@@ -124,9 +126,11 @@ class SecureRAG:
         candidates = state.get("retrieved", [])
         allowed = [h for h in candidates if authorize(role, h.metadata)]
         denied = [h for h in candidates if not authorize(role, h.metadata)]
-        payloads = {cid: ct for cid, ct, _ in self.store.get([h.id for h in allowed])}
+        payloads = {cid: (ct, meta) for cid, ct, meta in self.store.get([h.id for h in allowed])}
         allowed = [h for h in allowed if h.id in payloads]
-        scores = self.reranker.score(state["query"], [self.encryptor.decrypt(payloads[h.id]) for h in allowed])
+        texts = [self.encryptor.decrypt(payloads[h.id][0], aad=aad_for(h.id, payloads[h.id][1])) for h in allowed]
+        scores = self.reranker.score(state["query"], texts)
+        del texts
         for h, s in zip(allowed, scores):
             h.score = s
         ranked = sorted(allowed, key=lambda h: h.score, reverse=True)
@@ -165,15 +169,19 @@ class SecureRAG:
         authorized = kept
 
         plaintexts = []
+        flags: list[bool] = []
         excerpts = []
         flagged_total = 0
 
         # Payloads are fetched and decrypted only here, only for this request's authorized top-k.
-        payloads = {cid: ct for cid, ct, _ in self.store.get([h.id for h in authorized])}
+        payloads = {cid: (ct, meta) for cid, ct, meta in self.store.get([h.id for h in authorized])}
         for h in authorized:
             if h.id not in payloads:
                 continue  # deleted between retrieval and fetch
-            pt = self.encryptor.decrypt(payloads[h.id])
+            ciphertext, stored_meta = payloads[h.id]
+            # AAD binds the payload to this chunk ID and its stored labels: a relabelled or
+            # swapped payload fails authentication here instead of reaching the prompt.
+            pt = self.encryptor.decrypt(ciphertext, aad=aad_for(h.id, stored_meta))
             if not h.metadata.get("tokens"):
                 # Chunk from before token counts were stored: estimate after decryption.
                 cost = self.token_counter(pt)
@@ -182,7 +190,10 @@ class SecureRAG:
                     continue
                 used += cost
             plaintexts.append(pt)
-            _, is_flagged = sanitize_chunk(pt)
+            # Injection verdict computed once at ingest; re-scan only chunks that predate the flag.
+            stored_flag = stored_meta.get("injection_flagged")
+            is_flagged = bool(stored_flag) if stored_flag is not None else sanitize_chunk(pt)[1]
+            flags.append(is_flagged)
             if is_flagged:
                 flagged_total += 1
             excerpts.append({
@@ -193,7 +204,7 @@ class SecureRAG:
                 "flagged": is_flagged,
             })
 
-        context_block, _ = build_safe_context_block(plaintexts)
+        context_block, _ = build_safe_context_block(plaintexts, flags)
         state["context_block"] = context_block
         state["context_excerpts"] = excerpts
         state["flagged_count"] = flagged_total
@@ -228,11 +239,19 @@ class SecureRAG:
             answer=state.get("answer", ""),
             provider=provider,
             latency_ms=state["latency_ms"],
+            principal_id=state.get("principal_id"),
+            reranked=state.get("reranked", False),
+            dropped_for_budget=state.get("dropped_for_budget", 0),
         )
         return state
 
-    def query(self, query: str, user_role: str, top_k: int = 5) -> dict[str, Any]:
-        return self.graph.invoke({"query": query, "user_role": user_role, "top_k": top_k})
+    def query(self, query: str, user_role: str, top_k: int = 5, *, principal_id: str | None = None,
+              request_id: str | None = None) -> dict[str, Any]:
+        state: dict[str, Any] = {"query": query, "user_role": user_role, "top_k": top_k,
+                                 "principal_id": principal_id or f"internal:{user_role}"}
+        if request_id:
+            state["request_id"] = request_id
+        return self.graph.invoke(state)
 
 
 def approx_tokens(text: str) -> int:

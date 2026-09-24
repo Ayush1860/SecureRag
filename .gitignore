@@ -15,3 +15,7 @@ data/bench/
 data/*_state.sqlite*
 data/*_sparse/
 data/qdrant*/
+data/audit*.jsonl*
+data/api_keys.json
+data/keyring.json
+*.jsonl.lock
