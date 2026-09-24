@@ -294,3 +294,54 @@ every chunk and serve RSS grew with the corpus. Retrieval p95 grows 1.74× for a
 and the rewritten pipeline/retrieval/API tests). 3 consecutive full runs were green.
 
 **Commit:** `feat(storage): pluggable vector store, fail-fast key check, ID-only retrieval`
+
+---
+
+## Phase 3 — Scalable hybrid retrieval (remaining items)
+
+Items 1 (partitioned HMAC bm25s), 2 (candidate pools from settings, concurrent dense ∥ sparse,
+post-fusion allow-list) and 5's model-mismatch refusal were done in Phase 2, and so were the
+tests for partition isolation (spy), HMAC-vs-plaintext BM25 equality, and model mismatch.
+
+### Added
+- `securerag/retrieval/rerank.py`: `Reranker` protocol + lazily loaded `CrossEncoderReranker`
+  (`RERANK_MODEL`, default `BAAI/bge-reranker-base`).
+- A `rerank` graph node between `retrieve` and `authorize`, entered via a conditional edge only
+  when a reranker is configured (`RERANK_ENABLED=true`). With reranking on, `retrieve` returns the
+  fused top `RERANK_TOP_N` (default 30) and `rerank` scores them and cuts to `top_k`.
+  **Security:** the cross-encoder needs plaintext, so the node decrypts and scores only candidates
+  that pass `rbac.authorize` for the caller. Anything else passes through undecrypted for the
+  `authorize` node to block and count. Plaintext stays local to the scoring call.
+- Context token budget in `decrypt_sanitize` (`CONTEXT_TOKEN_BUDGET`, default 3000). Chunks are
+  kept in rank order until the budget is spent, and `dropped_for_budget` is reported in state and
+  in the API response. The cost comes from the `tokens` metadata recorded at ingest, so dropped
+  chunks are **never fetched or decrypted**. Older chunks without the field fall back to a
+  ~4 chars/token estimate after decryption. The top-ranked chunk is always kept.
+- `EMBED_QUERY_PREFIX` / `EMBED_DOC_PREFIX` settings for instruction-tuned embedders. `config.py`
+  documents `BAAI/bge-small-en-v1.5` and `intfloat/e5-small-v2` (with their required prefixes) as
+  upgrades. The doc prefix is part of each file's fingerprint, so changing it re-embeds.
+- `store.build_engine(settings, encryptor, stack)` builds the pipeline from settings (reranker,
+  budget); the API, Streamlit and benchmark use it.
+- `tests/test_rerank_budget.py` (7 tests):
+  - the node is skipped when disabled;
+  - rerank reorders the wider pool and cuts to top_k;
+  - rerank never decrypts or scores an unauthorized candidate, even when the retriever is forced
+    to leak confidential IDs;
+  - the budget drops low-ranked chunks without decrypting them;
+  - the top chunk is always kept;
+  - query/doc prefixes reach the encoder;
+  - the token estimator works.
+
+### Decisions
+- Reranker quality and latency are measured in Phase 6 with the ~90 MB
+  `cross-encoder/ms-marco-MiniLM-L-6-v2`. The default `bge-reranker-base` is ~1.1 GB and is off
+  by default, so I didn't download it just for the benchmark.
+
+### Acceptance
+Retrieval p95, 2000 vs 500 docs: 35.3 / 20.3 ms = **1.74×** (target ≤ 2×). Measured in Phase 2
+with the same retrieval code; Phase 3 changes only add the optional node and the budget step.
+
+### Tests
+`pytest -q`: 102 passed.
+
+**Commit:** `feat(retrieval): optional cross-encoder rerank node, context token budget, embed prefixes`

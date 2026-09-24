@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from securerag.config import Settings, get_settings
-from securerag.retrieval.store import open_serving_stack
+from securerag.retrieval.store import build_engine, open_serving_stack
 from securerag.security.audit import read_recent_audit_events
 from securerag.security.encryption import VectorStoreEncryptor, DecryptionError
 from securerag.security.rbac import ROLE_POLICY, AccessControlError
@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI):
         encryptor = VectorStoreEncryptor()
         # Fails fast (no silent rebuild) on an empty store, wrong key or model mismatch.
         stack = open_serving_stack(settings, encryptor)
-        engine = SecureRAG(stack.store, stack.retriever, encryptor, settings.audit_log_path)
+        engine = build_engine(settings, encryptor, stack)
 
         state["settings"] = settings
         state["encryptor"] = encryptor
@@ -119,6 +119,8 @@ def query_endpoint(request: QueryRequest):
         "authorized": len(result.get("authorized", [])),
         "blocked": result.get("blocked_count", 0),
         "flagged_chunks": result.get("flagged_count", 0),
+        "reranked": result.get("reranked", False),
+        "dropped_for_budget": result.get("dropped_for_budget", 0),
         "latency_ms": result.get("latency_ms", 0.0),
         "sources": [h.metadata.get("source") for h in result.get("authorized", [])],
         "context_excerpts": result.get("context_excerpts", []),

@@ -97,6 +97,20 @@ def verify_store(store: VectorStore, encryptor: VectorStoreEncryptor, settings: 
                 "the store was tampered with. Refusing to start; no automatic rebuild is attempted.") from exc
 
 
+def build_engine(settings: Settings, encryptor: VectorStoreEncryptor, stack: "ServingStack",
+                 audit_path: str | None = None, reranker: Any = None) -> Any:
+    """SecureRAG pipeline over ``stack`` configured from settings (rerank, context budget)."""
+    from securerag.pipeline.graph import SecureRAG
+
+    if reranker is None and settings.rerank_enabled:
+        from securerag.retrieval.rerank import CrossEncoderReranker
+
+        reranker = CrossEncoderReranker(settings.rerank_model, settings.embed_device)
+    return SecureRAG(stack.store, stack.retriever, encryptor, audit_path or settings.audit_log_path,
+                     reranker=reranker, rerank_top_n=settings.rerank_top_n,
+                     context_token_budget=settings.context_token_budget)
+
+
 @dataclass
 class ServingStack:
     store: VectorStore
@@ -116,11 +130,12 @@ def open_serving_stack(settings: Settings, encryptor: VectorStoreEncryptor, *, s
                        settings.resolved_sparse_dir)
     retriever = HybridRetriever(store, encoder, sparse, fusion_k=settings.fusion_k,
                                 dense_candidates=settings.dense_candidates,
-                                sparse_candidates=settings.sparse_candidates)
+                                sparse_candidates=settings.sparse_candidates,
+                                query_prefix=settings.embed_query_prefix)
     logger.info("serving stack ready: backend=%s chunks=%d partitions=%d", store.backend, store.count(),
                 len(sparse.available_partitions()))
     return ServingStack(store=store, encoder=encoder, sparse=sparse, retriever=retriever)
 
 
-__all__ = ["COLLECTION_NAME", "INDEX_KEY_LABEL", "ServingStack", "StoreKeyError", "StoreNotReadyError",
+__all__ = ["build_engine", "COLLECTION_NAME", "INDEX_KEY_LABEL", "ServingStack", "StoreKeyError", "StoreNotReadyError",
            "open_serving_stack", "open_vector_store", "run_ingestion", "verify_store"]

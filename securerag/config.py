@@ -44,10 +44,17 @@ class Settings(BaseSettings):
     dense_candidates: int = Field(default=50, ge=1)
     sparse_candidates: int = Field(default=50, ge=1)
     rerank_enabled: bool = False
+    rerank_model: str = "BAAI/bge-reranker-base"
+    rerank_top_n: int = Field(default=30, ge=1)
     context_token_budget: int = Field(default=3000, ge=100)
 
     # Embeddings and chunking
+    # Recommended upgrades: BAAI/bge-small-en-v1.5 (EMBED_QUERY_PREFIX="Represent this sentence for
+    # searching relevant passages: ") or intfloat/e5-small-v2 (EMBED_QUERY_PREFIX="query: ",
+    # EMBED_DOC_PREFIX="passage: "). Changing the model or the doc prefix requires --full-rebuild.
     embed_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embed_query_prefix: str = ""
+    embed_doc_prefix: str = ""
     embed_batch_size: int = Field(default=64, ge=1)
     embed_device: Literal["auto", "cpu", "cuda"] = "auto"
     chunk_size_tokens: int = Field(default=400, ge=16)

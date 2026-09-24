@@ -62,9 +62,8 @@ def _ingest_corpus(data_dir: str, chroma_dir: str) -> dict[str, Any]:
 def _open_engine(data_dir: str, chroma_dir: str, audit_path: str):
     """Returns (engine, timings) where timings splits startup into model load and store open."""
     from securerag.config import get_settings
-    from securerag.pipeline.graph import SecureRAG
     from securerag.retrieval.embedder import get_encoder
-    from securerag.retrieval.store import open_serving_stack
+    from securerag.retrieval.store import build_engine, open_serving_stack
     from securerag.security.encryption import VectorStoreEncryptor
 
     settings = get_settings().model_copy(update={"data_dir": data_dir, "chroma_dir": chroma_dir})
@@ -74,7 +73,7 @@ def _open_engine(data_dir: str, chroma_dir: str, audit_path: str):
     encryptor = VectorStoreEncryptor()
     stack = open_serving_stack(settings, encryptor, encoder=encoder)
     t2 = time.perf_counter()
-    engine = SecureRAG(stack.store, stack.retriever, encryptor, audit_path)
+    engine = build_engine(settings, encryptor, stack, audit_path=audit_path)
     return engine, {"model_load_s": round(t1 - t0, 3), "store_open_s": round(t2 - t1, 3)}
 
 

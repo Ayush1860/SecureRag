@@ -249,7 +249,7 @@ class IngestPipeline:
         except OSError as exc:
             return _Prepared(cand, STATUS_FAILED, error=f"read failed: {exc}")
         fingerprint = keyed_hash(self.index_key, hashlib.sha256(raw).hexdigest(), labels.department,
-                                 labels.clearance, self.settings.embed_model,
+                                 labels.clearance, self.settings.embed_model, self.settings.embed_doc_prefix,
                                  f"{CHUNKER_VERSION}:{self.max_tokens}:{self.overlap}")
         if fingerprint == cand.prev_fingerprint:
             return _Prepared(cand, "unchanged", fingerprint=fingerprint, labels=labels)
@@ -324,7 +324,7 @@ class IngestPipeline:
         assert self.store is not None and self.state is not None
         rows = [(doc, chunk) for doc in docs for chunk in doc.chunks]
         if rows:
-            texts = [chunk.text for _, chunk in rows]
+            texts = [self.settings.embed_doc_prefix + chunk.text for _, chunk in rows]
             embeddings = self.encoder.encode(texts, batch_size=self.settings.embed_batch_size,
                                              normalize_embeddings=True, convert_to_numpy=True,
                                              show_progress_bar=False)

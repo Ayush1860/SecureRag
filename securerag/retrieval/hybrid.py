@@ -46,7 +46,9 @@ class HybridRetriever:
         fusion_k: int = 60,
         dense_candidates: int = 50,
         sparse_candidates: int = 50,
+        query_prefix: str = "",
     ):
+        self.query_prefix = query_prefix
         self.store = store
         self.encoder = encoder
         self.sparse = sparse
@@ -56,7 +58,7 @@ class HybridRetriever:
         self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="retrieve")
 
     def _dense(self, query: str, where: dict[str, Any] | None) -> list[str]:
-        embedding = self.encoder.encode([query], normalize_embeddings=True)[0]
+        embedding = self.encoder.encode([self.query_prefix + query], normalize_embeddings=True)[0]
         embedding = embedding.tolist() if hasattr(embedding, "tolist") else list(embedding)
         return [cid for cid, _ in self.store.query(embedding, self.dense_candidates, where)]
 

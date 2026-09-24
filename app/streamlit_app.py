@@ -15,7 +15,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from securerag.config import get_settings
-from securerag.retrieval.store import open_serving_stack
+from securerag.retrieval.store import build_engine, open_serving_stack
 from securerag.security.audit import read_recent_audit_events
 from securerag.security.encryption import VectorStoreEncryptor
 from securerag.security.rbac import ROLE_POLICY
@@ -174,7 +174,7 @@ def get_engine():
     settings = get_settings()
     encryptor = VectorStoreEncryptor()
     stack = open_serving_stack(settings, encryptor)
-    engine = SecureRAG(stack.store, stack.retriever, encryptor, settings.audit_log_path)
+    engine = build_engine(settings, encryptor, stack)
     return engine, stack.store, settings
 
 
