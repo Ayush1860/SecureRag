@@ -16,8 +16,8 @@ without decrypting anything.
 """
 from __future__ import annotations
 
-import hmac
 import hashlib
+import hmac
 import json
 import logging
 import re
@@ -25,9 +25,10 @@ import shutil
 import threading
 import time
 import uuid
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any
 
 import numpy as np
 
@@ -45,7 +46,8 @@ try:  # bm25s ships an English stopword list; fall back to a small built-in one.
 
     STOPWORDS = frozenset(_BM25S_STOPWORDS)
 except Exception:  # noqa: BLE001
-    STOPWORDS = frozenset("a an and are as at be by for from has in is it its of on or that the to was were will with".split())
+    STOPWORDS = frozenset(
+        "a an and are as at be by for from has in is it its of on or that the to was were will with".split())
 
 
 def tokenize(text: str) -> list[str]:
@@ -202,6 +204,10 @@ class SparseRetriever:
             hits.extend((loaded.ids[i], float(scores[i])) for i in top if scores[i] > 0)
         hits.sort(key=lambda x: x[1], reverse=True)
         return hits[:k]
+
+    def warm(self) -> int:
+        """Load every available partition now (used at startup so the first query isn't slow)."""
+        return sum(1 for p in self.available_partitions() if self._load(p) is not None)
 
     def loaded_partitions(self) -> list[str]:
         return sorted(self._cache)

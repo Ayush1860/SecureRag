@@ -9,8 +9,8 @@ Chunks carry their character offsets into the source text; ``text`` is always
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 LengthFn = Callable[[str], int]
 
@@ -63,7 +63,8 @@ def _atomic_units(text: str, max_tokens: int, length_fn: LengthFn) -> list[tuple
             elif level + 1 < len(levels):
                 descend(s, e, level + 1)
             else:
-                units.extend((cs, ce, length_fn(text[cs:ce])) for cs, ce in _char_split(text, s, e, max_tokens, length_fn))
+                pieces = _char_split(text, s, e, max_tokens, length_fn)
+                units.extend((cs, ce, length_fn(text[cs:ce])) for cs, ce in pieces)
 
     descend(0, len(text), 0)
     return units

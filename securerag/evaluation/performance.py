@@ -8,8 +8,11 @@ Provides isolated and end-to-end latency benchmarks for:
 """
 
 import time
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
+
 import numpy as np
+
 from securerag.evaluation.datasets import RETRIEVAL_BENCHMARK_CASES, RetrievalCase
 from securerag.llm.providers import SYSTEM_PROMPT, call_llm
 from securerag.pipeline.graph import SecureRAG

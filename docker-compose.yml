@@ -1,0 +1,63 @@
+# SecureRAG with Qdrant (server mode).
+#
+#   cp .env.example .env              # set SECURERAG_AES_KEY_B64; ENV/AUTH_MODE for your setup
+#   docker compose run --rm ingest    # one-off: encrypt + index DATA_DIR into Qdrant
+#   docker compose run --rm api python scripts/create_api_key.py --principal alice --role employee
+#   docker compose up -d api          # http://localhost:8000
+#
+# /data (volume "securerag_data") holds the ingestion state DB, sparse indexes, audit log and
+# API keys; Qdrant keeps vectors + ciphertext in its own volume. Both services read the same
+# sparse indexes, and the API picks up re-built partitions without a restart.
+x-securerag-env: &securerag-env
+  VECTOR_BACKEND: qdrant
+  QDRANT_URL: http://qdrant:6333
+  STATE_DB_PATH: /data/ingest_state.sqlite
+  SPARSE_DIR: /data/sparse
+  AUDIT_LOG_PATH: /data/audit/audit.jsonl
+  API_KEYS_FILE: /data/api_keys.json
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+    # Not published on the host: only the API and ingest containers talk to it.
+    expose: ["6333"]
+
+  api:
+    build: .
+    image: securerag:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      <<: *securerag-env
+    ports:
+      - "8000:8000"
+    volumes:
+      - securerag_data:/data
+    depends_on:
+      - qdrant
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(urllib.request.urlopen('http://127.0.0.1:8000/api/ready').status != 200)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+
+  ingest:
+    image: securerag:latest
+    build: .
+    profiles: ["ingest"]
+    env_file: .env
+    environment:
+      <<: *securerag-env
+    command: ["python", "scripts/ingest.py"]
+    volumes:
+      - securerag_data:/data
+    depends_on:
+      - qdrant
+
+volumes:
+  qdrant_data:
+  securerag_data:

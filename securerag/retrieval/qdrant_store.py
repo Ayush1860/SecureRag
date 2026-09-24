@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any, Iterator, Sequence
+from collections.abc import Iterator, Sequence
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -102,11 +103,12 @@ class QdrantVectorStore:
 
         self._ensure(len(embeddings[0]))
         for start in range(0, len(ids), _UPSERT_BATCH):
+            end = start + _UPSERT_BATCH
             points = [
                 models.PointStruct(id=point_id(cid), vector=[float(x) for x in vec],
                                    payload={**meta, "cid": cid, "ct": ct})
-                for cid, vec, ct, meta in zip(ids[start:start + _UPSERT_BATCH], embeddings[start:start + _UPSERT_BATCH],
-                                              payloads[start:start + _UPSERT_BATCH], metadatas[start:start + _UPSERT_BATCH])
+                for cid, vec, ct, meta in zip(ids[start:end], embeddings[start:end], payloads[start:end],
+                                              metadatas[start:end])
             ]
             self.client.upsert(self.collection_name, points=points, wait=True)
 
@@ -124,8 +126,8 @@ class QdrantVectorStore:
         from qdrant_client import models
 
         for start in range(0, len(ids), 1000):
-            self.client.delete(self.collection_name, wait=True,
-                               points_selector=models.PointIdsList(points=[point_id(c) for c in ids[start:start + 1000]]))
+            selector = models.PointIdsList(points=[point_id(c) for c in ids[start:start + 1000]])
+            self.client.delete(self.collection_name, wait=True, points_selector=selector)
 
     def query(self, embedding: Sequence[float], n: int, where: dict[str, Any] | None = None) -> list[tuple[str, float]]:
         if n <= 0 or not self._exists():

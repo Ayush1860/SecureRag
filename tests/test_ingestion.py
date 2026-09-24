@@ -2,6 +2,7 @@ import hashlib
 
 import numpy as np
 import pytest
+from conftest import make_store
 
 from securerag.config import Settings
 from securerag.ingestion.chunker import chunk_text, whitespace_length
@@ -10,9 +11,6 @@ from securerag.ingestion.metadata import MetadataError, MetadataResolver
 from securerag.ingestion.pipeline import IngestError, IngestPipeline
 from securerag.ingestion.state import IngestState
 from securerag.security.encryption import DecryptionError, VectorStoreEncryptor, aad_for
-
-from conftest import make_store
-
 
 # --------------------------------------------------------------------------- helpers
 

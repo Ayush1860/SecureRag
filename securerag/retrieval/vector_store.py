@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import logging
 import random
+from collections.abc import Iterator, Sequence
 from pathlib import Path
-from typing import Any, Iterator, Protocol, Sequence, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
-from securerag.security.rbac import (all_partitions, metadata_matches_filter, partition_name,
-                                     partitions_for_filter)
+from securerag.security.rbac import all_partitions, metadata_matches_filter, partition_name, partitions_for_filter
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,8 @@ class VectorStore(Protocol):
 
     def delete(self, ids: Sequence[str]) -> None: ...
 
-    def query(self, embedding: Sequence[float], n: int, where: dict[str, Any] | None = None) -> list[tuple[str, float]]: ...
+    def query(self, embedding: Sequence[float], n: int,
+              where: dict[str, Any] | None = None) -> list[tuple[str, float]]: ...
 
     def get(self, ids: Sequence[str]) -> list[tuple[str, str, dict[str, Any]]]: ...
 

@@ -22,9 +22,10 @@ import json
 import os
 import re
 import threading
-from datetime import datetime, timezone
+from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from filelock import FileLock
 
@@ -98,7 +99,7 @@ class AuditLog:
             last = self._last_event()
             if last is not None and "entry_hash" not in last:
                 # Pre-chain log from an older version: set it aside and start a fresh chain.
-                stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+                stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
                 self.path.rename(self.path.with_name(f"{self.path.stem}.legacy-{stamp}{self.path.suffix}"))
                 last = None
             self._rotate_if_needed()
@@ -198,7 +199,7 @@ def audit_event(
     Appends a hash-chained structured audit entry.
     Queries and answers are stored as SHA-256 hashes to preserve privacy while ensuring auditability.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     event = {
         "timestamp": now.timestamp(),
         "timestamp_iso": now.isoformat(),

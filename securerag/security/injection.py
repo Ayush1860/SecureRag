@@ -9,7 +9,8 @@ on top; it runs at ingest only, so it adds no query latency.
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from securerag.security.sanitizer import flag_suspicious
 

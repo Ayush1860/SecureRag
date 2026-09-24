@@ -2,11 +2,14 @@ import math
 import os
 import time
 import uuid
-from typing import Any, Callable, TypedDict
-from langgraph.graph import StateGraph, START, END
+from collections.abc import Callable, Iterator
+from typing import Any, TypedDict
 
-from securerag.llm.providers import SYSTEM_PROMPT, call_llm
-from securerag.retrieval.hybrid import HybridRetriever, Chunk
+from langgraph.graph import END, START, StateGraph
+
+from securerag.llm.providers import SYSTEM_PROMPT
+from securerag.llm.router import LLMRouter
+from securerag.retrieval.hybrid import Chunk, HybridRetriever
 from securerag.retrieval.rerank import Reranker
 from securerag.retrieval.vector_store import VectorStore
 from securerag.security.audit import audit_event
@@ -30,6 +33,10 @@ class RAGState(TypedDict, total=False):
     context_block: str
     context_excerpts: list[dict[str, Any]]
     answer: str
+    llm_provider: str
+    llm_attempts: int
+    llm_fallbacks: list[str]
+    streamed: bool
     latency_ms: float
     _start: float
 
@@ -37,7 +44,7 @@ class RAGState(TypedDict, total=False):
 class SecureRAG:
     """
     Security-hardened RAG pipeline orchestrated via LangGraph.
-    
+
     Nodes enforce strict security perimeters:
     1. validate (RBAC identity verification & request framing)
     2. retrieve (dense + partitioned sparse hybrid retrieval, RBAC pre-filtered, RRF fused)
@@ -59,6 +66,7 @@ class SecureRAG:
         rerank_top_n: int = 30,
         context_token_budget: int = 3000,
         token_counter: Callable[[str], int] | None = None,
+        llm: LLMRouter | None = None,
     ):
         self.store = store
         self.retriever = retriever
@@ -68,9 +76,13 @@ class SecureRAG:
         self.rerank_top_n = rerank_top_n
         self.context_token_budget = context_token_budget
         self.token_counter = token_counter or approx_tokens
+        self.llm = llm or LLMRouter.from_env()
         self.graph = self._build_graph()
+        self.prepare_graph = self._build_graph(until_context=True)
 
-    def _build_graph(self):
+    def _build_graph(self, until_context: bool = False):
+        """Full pipeline, or (``until_context``) validate -> ... -> decrypt_sanitize for streaming,
+        where generation and audit happen outside the graph."""
         graph = StateGraph(RAGState)
         graph.add_node("validate", self.validate_node)
         graph.add_node("retrieve", self.retrieve_node)
@@ -86,6 +98,9 @@ class SecureRAG:
                                     {"rerank": "rerank", "authorize": "authorize"})
         graph.add_edge("rerank", "authorize")
         graph.add_edge("authorize", "decrypt_sanitize")
+        if until_context:
+            graph.add_edge("decrypt_sanitize", END)
+            return graph.compile()
         graph.add_edge("decrypt_sanitize", "generate")
         graph.add_edge("generate", "audit")
         graph.add_edge("audit", END)
@@ -129,6 +144,7 @@ class SecureRAG:
         payloads = {cid: (ct, meta) for cid, ct, meta in self.store.get([h.id for h in allowed])}
         allowed = [h for h in allowed if h.id in payloads]
         texts = [self.encryptor.decrypt(payloads[h.id][0], aad=aad_for(h.id, payloads[h.id][1])) for h in allowed]
+        assert self.reranker is not None  # the graph only routes here when a reranker is set
         scores = self.reranker.score(state["query"], texts)
         del texts
         for h, s in zip(allowed, scores):
@@ -158,7 +174,8 @@ class SecureRAG:
         # Context token budget: keep chunks in rank order until the budget is used up. The chunk's
         # token count is recorded at ingest, so dropped chunks are never fetched or decrypted.
         # The top-ranked chunk is always kept.
-        kept, used = [], 0
+        kept: list[Chunk] = []
+        used = 0
         for h in authorized:
             cost = int(h.metadata.get("tokens") or 0)
             if kept and cost and used + cost > self.context_token_budget:
@@ -168,7 +185,7 @@ class SecureRAG:
         state["dropped_for_budget"] = len(authorized) - len(kept)
         authorized = kept
 
-        plaintexts = []
+        plaintexts: list[str] = []
         flags: list[bool] = []
         excerpts = []
         flagged_total = 0
@@ -210,22 +227,26 @@ class SecureRAG:
         state["flagged_count"] = flagged_total
         return state
 
+    NO_ACCESS_ANSWER = ("I do not have access to any authorized documents to answer this question "
+                        "under your current role and clearance level.")
+
     def generate_node(self, state: RAGState) -> RAGState:
         if not state.get("authorized"):
-            state["answer"] = (
-                "I do not have access to any authorized documents to answer this question "
-                "under your current role and clearance level."
-            )
+            state["answer"] = self.NO_ACCESS_ANSWER
+            state["llm_provider"], state["llm_attempts"], state["llm_fallbacks"] = "none", 0, []
             return state
 
         user_prompt = f"{state['context_block']}\n\nQuestion: {state['query']}"
-        state["answer"] = call_llm(SYSTEM_PROMPT, user_prompt)
+        result = self.llm.generate(SYSTEM_PROMPT, user_prompt)
+        state["answer"] = result.text
+        state["llm_provider"], state["llm_attempts"], state["llm_fallbacks"] = (result.provider, result.attempts,
+                                                                                result.fallbacks)
         return state
 
     def audit_node(self, state: RAGState) -> RAGState:
         start = state.get("_start", time.perf_counter())
         state["latency_ms"] = (time.perf_counter() - start) * 1000
-        provider = os.getenv("LLM_PROVIDER", "mock")
+        provider = state.get("llm_provider") or os.getenv("LLM_PROVIDER") or "mock"
 
         audit_event(
             self.audit_path,
@@ -242,6 +263,9 @@ class SecureRAG:
             principal_id=state.get("principal_id"),
             reranked=state.get("reranked", False),
             dropped_for_budget=state.get("dropped_for_budget", 0),
+            llm_attempts=state.get("llm_attempts", 0),
+            llm_fallbacks=state.get("llm_fallbacks", []),
+            streamed=state.get("streamed", False),
         )
         return state
 
@@ -252,6 +276,36 @@ class SecureRAG:
         if request_id:
             state["request_id"] = request_id
         return self.graph.invoke(state)
+
+    # ------------------------------------------------------------------ streaming
+    def prepare(self, query: str, user_role: str, top_k: int = 5, *, principal_id: str | None = None,
+                request_id: str | None = None) -> dict[str, Any]:
+        """Run validate -> retrieve -> [rerank] -> authorize -> decrypt_sanitize only."""
+        state: dict[str, Any] = {"query": query, "user_role": user_role, "top_k": top_k,
+                                 "principal_id": principal_id or f"internal:{user_role}"}
+        if request_id:
+            state["request_id"] = request_id
+        return self.prepare_graph.invoke(state)
+
+    def stream_answer(self, state: dict[str, Any]) -> Iterator[str]:
+        """Yield the answer in pieces, then store it and write the audit entry."""
+        pieces: list[str] = []
+        if not state.get("authorized"):
+            pieces.append(self.NO_ACCESS_ANSWER)
+            state["llm_provider"], state["llm_attempts"], state["llm_fallbacks"] = "none", 0, []
+            yield self.NO_ACCESS_ANSWER
+        else:
+            user_prompt = f"{state['context_block']}\n\nQuestion: {state['query']}"
+            for piece in self.llm.stream(SYSTEM_PROMPT, user_prompt):
+                pieces.append(piece)
+                yield piece
+            result = self.llm.last
+            state["llm_provider"], state["llm_attempts"], state["llm_fallbacks"] = (result.provider, result.attempts,
+                                                                                    result.fallbacks)
+        state["answer"] = "".join(pieces)
+        state["streamed"] = True
+        # Audit only after the stream completes, so the logged answer hash covers the full answer.
+        self.audit_node(state)  # type: ignore[arg-type]
 
 
 def approx_tokens(text: str) -> int:

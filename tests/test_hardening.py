@@ -2,11 +2,11 @@
 ingest-time injection flags."""
 import base64
 import json
-import os
 import threading
 from pathlib import Path
 
 import pytest
+from conftest import SAMPLE_DOCS, FakeEncoder, ingest, make_settings, store_for, write_docs
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
 
@@ -14,12 +14,16 @@ from securerag.ingestion.state import IngestState
 from securerag.pipeline.graph import SecureRAG
 from securerag.retrieval.store import open_serving_stack
 from securerag.security.audit import AuditLog, audit_event, read_recent_audit_events, verify_chain
-from securerag.security.encryption import (DecryptionError, Keyring, VectorStoreEncryptor, aad_for, chunk_aad,
-                                           key_fingerprint)
+from securerag.security.encryption import (
+    DecryptionError,
+    Keyring,
+    VectorStoreEncryptor,
+    aad_for,
+    chunk_aad,
+    key_fingerprint,
+)
 from securerag.security.injection import InjectionDetector
 from securerag.security.rotation import rotate_store
-
-from conftest import SAMPLE_DOCS, FakeEncoder, ingest, make_settings, store_for, write_docs
 
 
 def _b64(key: bytes) -> str:
@@ -105,7 +109,7 @@ def test_relabelled_chunk_fails_authentication_instead_of_leaking(tmp_path):
 def test_swapped_ciphertexts_fail_authentication(tmp_path):
     settings, encryptor, stack, engine = _stack(tmp_path)
     rows = [row for batch in stack.store.iter_all() for row in batch]
-    (a_id, a_ct, a_meta), (b_id, b_ct, b_meta) = rows[0], rows[1]
+    (a_id, a_ct, a_meta), (_, b_ct, _) = rows[0], rows[1]
     with pytest.raises(DecryptionError):
         encryptor.decrypt(b_ct, aad=aad_for(a_id, a_meta))
     assert encryptor.decrypt(a_ct, aad=aad_for(a_id, a_meta))

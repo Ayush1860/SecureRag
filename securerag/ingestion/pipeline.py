@@ -15,11 +15,12 @@ import logging
 import time
 import uuid
 from collections import deque
+from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, TypeVar
+from typing import Any, TypeVar
 
 from securerag.config import Settings
 from securerag.ingestion.chunker import LengthFn, TextChunk, chunk_text, whitespace_length
@@ -330,7 +331,7 @@ class IngestPipeline:
             embeddings = self.encoder.encode(texts, batch_size=self.settings.embed_batch_size,
                                              normalize_embeddings=True, convert_to_numpy=True,
                                              show_progress_bar=False)
-            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            now = datetime.now(UTC).isoformat(timespec="seconds")
             injection_flags = self.detector.flags([chunk.text for _, chunk in rows])
             key_id = self.encryptor.key_id
             ids, payloads, metadatas = [], [], []

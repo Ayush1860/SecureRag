@@ -474,3 +474,108 @@ Real model, `data/sample`, uvicorn on :8765.
 `pytest -q`: 139 passed.
 
 **Commit:** `feat(security): authenticated roles, keyring with AAD and rotation, hash-chained audit, API hardening`
+
+---
+
+## Phase 5 — Runtime robustness and deployment
+
+(Done before Phase 6, so the final evaluation and README describe the finished system.)
+
+### 1. LLM layer — `securerag/llm/router.py`
+- One cached SDK client per provider (`lru_cache`), SDK-level retries off, and a timeout
+  (`LLM_TIMEOUT_S`, default 30 s).
+- `tenacity` exponential backoff (`LLM_MAX_RETRIES`, default 3), but **only** for retryable failures:
+  408/409/425/429/5xx/529, timeouts and connection errors. 400/401/403 go straight to the next
+  provider, and a missing API key (`ProviderUnavailable`) is skipped without retrying.
+- Ordered fallback chain `LLM_PROVIDER` + `LLM_FALLBACKS` (default `refusal`). `refusal` returns a
+  fixed "temporarily unavailable" message; if the whole chain fails the router refuses instead
+  of raising.
+- **Behaviour change:** the old code silently fell back to the *mock extractive answerer* when a
+  key was missing or a call failed, so production would have answered with regex-extracted
+  sentences. It now falls back to the configured chain and ends in a refusal. `mock` is still
+  available explicitly (tests, benchmarks).
+- The graph state and audit log record `llm_provider` (the provider that actually answered),
+  `llm_attempts` and `llm_fallbacks`. `call_llm()` stays as a compatibility wrapper.
+
+### 2. Streaming — `POST /api/query/stream` (SSE)
+- `SecureRAG.prepare()` runs a second compiled graph (validate → retrieve → [rerank] → authorize →
+  decrypt_sanitize), so auth and validation errors are still normal HTTP codes. The response then
+  streams `meta` (counts, sources, excerpts), `token` pieces and `done` (provider, attempts,
+  latency), or `error` with only the request ID.
+- `stream_answer()` writes the audit entry **after** the stream completes (`streamed: true`), so
+  the answer hash covers the full text. Pieces come from `LLMRouter.stream`, which splits the
+  routed result, so retries and fallbacks behave exactly as in the non-streaming path.
+  Provider-native token streaming is a possible follow-up.
+
+### 3. Health
+- `/api/health`: liveness.
+- `/api/ready`: returns 503 until startup has verified the store and key, warmed the embedder
+  (one encode) and loaded every sparse partition (`SparseRetriever.warm()`), and while the store
+  is empty.
+
+### 4. Logging — `securerag/logging_config.py`
+JSON lines (`ts`, `level`, `logger`, `request_id`, `msg`, extras, `exc`). The request ID travels
+in a `ContextVar` set by the middleware (and inside SSE generators), so every line from the
+retriever, router or audit writer carries it. Each request gets one access log line.
+`LOG_FORMAT=text` is available for local work.
+
+### 5. Admin ingestion — `securerag/ingestion/jobs.py`
+- `POST /api/admin/ingest` (admin role only, `{"full_rebuild": bool}`, no client-supplied paths,
+  so it can't be pointed at arbitrary server folders) returns 202 with a `job_id`. Starting a
+  second job while one runs returns 409, and each start is written to the audit chain.
+- `GET /api/admin/ingest/{job_id}` reads progress from the state DB `runs` table, which the
+  pipeline updates after every flushed batch.
+- The job runs against the **serving store object and encoder**, so new chunks are queryable at
+  once with no restart; the test proves a new document is retrievable right after the job.
+
+### 6. Docker
+- `Dockerfile`:
+  - three stages: Vite build, then Python venv with CPU-only torch and the embedding model baked
+    in, then a slim runtime;
+  - non-root uid 10001, `HF_HUB_OFFLINE=1`, a `/data` volume and a healthcheck;
+  - secure defaults `ENV=prod AUTH_MODE=api_key`.
+- `docker-compose.yml`:
+  - `qdrant` (not published on the host), `api` (healthcheck on `/api/ready`) and a one-shot
+    `ingest` profile;
+  - a shared `/data` volume for the state DB, sparse indexes, audit log and API keys.
+- **Not built locally:** Docker isn't installed on this machine. Both files were
+  syntax-checked (YAML parsed) and follow standard patterns, but the first `docker compose build`
+  still needs a real run.
+
+### 7. CI — `.github/workflows/ci.yml`
+- `lint`: ruff + mypy on `securerag/`.
+- `test`: CPU torch, pytest, then `benchmark_scale.py --docs 300 --queries-per-role 50
+  --fail-on-leak`, uploading the report as an artifact.
+- `frontend`: `npm ci && npm run build`.
+- The same benchmark command passed locally (0 leaks).
+- Added `[tool.ruff]` (E, F, W, B, I, UP at 120 columns) and `[tool.mypy]` to `pyproject.toml`.
+  A user-level ruff config on this machine enables ~100 extra rules, so pinning the project config
+  keeps CI and local runs identical. Cleanup: 98 autofixes (imports, `UP` modernisations), a few
+  wrapped lines, and `# noqa: E501` only on long data strings. mypy found 11 real typing gaps:
+  `RolePolicy` TypedDict, the HKDF return type, rerank assert, list annotations. Both tools are
+  clean now.
+
+### 8. UI consolidation
+The React frontend is the primary UI.
+- **Kept** `app/streamlit_app.py` as a dev-only demo (it refuses to run unless `ENV=dev`, see Phase 4).
+- **Removed** the root `streamlit_app.py` shim; the README now says `streamlit run app/streamlit_app.py`.
+- **Removed** `frontend/src/app.js` + `style.css`, a leftover vanilla-JS UI that `index.html` no
+  longer loads.
+
+I made these calls without asking, as you instructed. Restore with
+`git checkout HEAD~1 -- streamlit_app.py frontend/src/app.js frontend/src/style.css` if you want them back.
+
+### Tests
+- `tests/test_runtime.py` (21):
+  - router: retry then success; fallback after exhausted retries; no retry on 401 or missing key;
+    refusal when everything fails; stream equals generate; chain parsing; `is_retryable` matrix;
+  - graph records provider, attempts and fallbacks in state and audit;
+  - SSE: event order, tokens equal the non-stream answer, audit written after the stream with a
+    valid chain; body role → 422 on the stream; guest can't see the margin;
+  - `/api/ready` 200/503;
+  - admin job lifecycle: 403 for exec, 422 for a `data_dir` field, completion, 404 for a bad ID,
+    new doc queryable, audit entry; 409 for a concurrent job;
+  - JSON logs carry the request ID.
+- `pytest -q`: 160 passed. `ruff check`: clean. `mypy securerag`: clean.
+
+**Commit:** `feat(runtime): LLM router with retries/fallbacks, SSE, readiness, JSON logs, admin ingest, Docker, CI`

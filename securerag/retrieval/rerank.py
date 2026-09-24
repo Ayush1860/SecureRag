@@ -7,8 +7,9 @@ the decrypted text only for the duration of the scoring call.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from functools import lru_cache
-from typing import Any, Protocol, Sequence
+from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
 

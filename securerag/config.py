@@ -68,6 +68,9 @@ class Settings(BaseSettings):
 
     # Generation
     llm_provider: str = "mock"
+    llm_fallbacks: str = Field(default="refusal", description="Comma-separated providers tried after LLM_PROVIDER")
+    llm_timeout_s: float = Field(default=30.0, gt=0)
+    llm_max_retries: int = Field(default=3, ge=1, le=10)
 
     # Deployment / API security
     env: Literal["dev", "prod"] = "prod"
@@ -85,6 +88,9 @@ class Settings(BaseSettings):
     rate_limit: str = "60/minute"
     rate_limit_storage: str = "memory://"
     audit_reader_roles: str = "admin,exec"
+    admin_roles: str = "admin"
+    log_format: Literal["json", "text"] = "json"
+    log_level: str = "INFO"
 
     @model_validator(mode="after")
     def _check(self) -> "Settings":
@@ -95,6 +101,10 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip() and o.strip() != "*"]
+
+    @property
+    def admin_role_set(self) -> set[str]:
+        return {r.strip() for r in self.admin_roles.split(",") if r.strip()}
 
     @property
     def audit_reader_role_set(self) -> set[str]:

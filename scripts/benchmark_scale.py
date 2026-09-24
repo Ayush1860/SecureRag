@@ -335,7 +335,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         lines += ["### Failure", "", "```text", srv["error"], "```", ""]
         return "\n".join(lines)
     lines += [
-        "| Role | Queries | Errors | p50 ms | p95 ms | p99 ms | Retrieval p50 | Retrieval p95 | Leaks | Own canaries seen |",
+        "| Role | Queries | Errors | p50 ms | p95 ms | p99 ms | Retrieval p50 | Retrieval p95 | Leaks | Own canaries seen |",  # noqa: E501
         "|---|---|---|---|---|---|---|---|---|---|",
     ]
     for role, s in srv["per_role"].items():
@@ -355,7 +355,8 @@ def _fmt_hw(hw: dict[str, Any]) -> str:
     if not hw:
         return "unknown"
     gpu = hw.get("gpu") or "no GPU"
-    return f"{hw.get('cpu_count')} CPUs, {hw.get('ram_gb')} GB RAM, {gpu}, Python {hw.get('python')}, {hw.get('platform')}"
+    return (f"{hw.get('cpu_count')} CPUs, {hw.get('ram_gb')} GB RAM, {gpu}, "
+            f"Python {hw.get('python')}, {hw.get('platform')}")
 
 
 def _git_commit() -> str:

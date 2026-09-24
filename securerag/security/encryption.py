@@ -58,13 +58,19 @@ def _decode_key(encoded: str, source: str) -> bytes:
 
 def key_fingerprint(key: bytes) -> str:
     """Short non-secret identifier derived from a key (safe to store in metadata)."""
-    sub = HKDF(key, 32, salt=b"securerag", hashmod=SHA256, context=b"securerag/key-id/v1")
+    sub = _hkdf(key, b"securerag/key-id/v1")
     return hmac.new(sub, b"key-id", hashlib.sha256).hexdigest()[:12]
+
+
+def _hkdf(key: bytes, context: bytes) -> bytes:
+    out = HKDF(key, 32, salt=b"securerag", hashmod=SHA256, context=context)
+    assert isinstance(out, bytes)  # num_keys=1 -> a single key, not a tuple
+    return out
 
 
 def chunk_aad(chunk_id: str, department: str, clearance: str) -> bytes:
     """Associated data binding a payload to its chunk ID and RBAC labels."""
-    return f"securerag/chunk/v2|{chunk_id}|{department}|{clearance}".encode("utf-8")
+    return f"securerag/chunk/v2|{chunk_id}|{department}|{clearance}".encode()
 
 
 def aad_for(chunk_id: str, metadata: dict) -> bytes:
@@ -174,8 +180,7 @@ class VectorStoreEncryptor:
         Rooted in the index key (not the active key) so HMAC-derived chunk IDs and sparse terms
         survive rotation of the encryption key.
         """
-        root = self.keyring.keys[self.keyring.index_id]
-        return HKDF(root, 32, salt=b"securerag", hashmod=SHA256, context=label.encode("utf-8"))
+        return _hkdf(self.keyring.keys[self.keyring.index_id], label.encode("utf-8"))
 
     # ------------------------------------------------------------------ crypto
     def encrypt(self, plaintext: str, aad: bytes | None = None) -> str:

@@ -1,8 +1,15 @@
-from dataclasses import dataclass
 
-CLEARANCE_LEVELS = {"public": 0, "internal": 1, "confidential": 2}
+from typing import TypedDict
 
-ROLE_POLICY = {
+
+class RolePolicy(TypedDict):
+    max_clearance: str
+    departments: list[str]
+
+
+CLEARANCE_LEVELS: dict[str, int] = {"public": 0, "internal": 1, "confidential": 2}
+
+ROLE_POLICY: dict[str, RolePolicy] = {
     "guest": {"max_clearance": "public", "departments": ["general"]},
     "employee": {"max_clearance": "internal", "departments": ["general", "engineering", "hr"]},
     "finance_lead": {"max_clearance": "confidential", "departments": ["general", "finance"]},

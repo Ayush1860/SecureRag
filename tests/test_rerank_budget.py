@@ -1,10 +1,10 @@
 from pathlib import Path
 
+from conftest import SAMPLE_DOCS, FakeEncoder, ingest, make_settings, store_for, write_docs
+
 from securerag.pipeline.graph import SecureRAG, approx_tokens
 from securerag.retrieval.hybrid import Chunk
 from securerag.retrieval.store import open_serving_stack
-
-from conftest import SAMPLE_DOCS, FakeEncoder, ingest, make_settings, store_for, write_docs
 
 
 class KeywordReranker:

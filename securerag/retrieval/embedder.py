@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from functools import lru_cache
-from typing import Any, Callable
+from typing import Any
 
 os.environ.setdefault("USE_TF", "0")
 os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")

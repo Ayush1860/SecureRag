@@ -6,17 +6,18 @@ Evaluates:
 3. End-to-End Cross-Boundary Unauthorized Retrieval Rate
 """
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
+
 from securerag.evaluation.datasets import (
+    CROSS_BOUNDARY_QUERY_CASES,
     INJECTION_BENCHMARK_CASES,
     RBAC_POLICY_TEST_CASES,
-    CROSS_BOUNDARY_QUERY_CASES,
 )
 from securerag.security.rbac import (
     CLEARANCE_LEVELS,
     ROLE_POLICY,
     authorize,
-    build_chroma_filter,
 )
 from securerag.security.sanitizer import flag_suspicious
 

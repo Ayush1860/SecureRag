@@ -1,6 +1,5 @@
-import os
-import re
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -31,13 +30,13 @@ def _mock_grounded_response(system_prompt: str, user_prompt: str) -> str:
     # Remove quarantined instruction blocks so mock generation acts as a secure, instruction-following LLM
     clean_context = re.sub(
         r"\[UNTRUSTED_DOCUMENT_CONTENT[^\]]*\].*?\[END_UNTRUSTED_CONTENT\]",
-        lambda m: re.sub(r"(ignore all|reveal the system prompt|you are now)[^\.]*\.", "", m.group(0), flags=re.IGNORECASE),
+        lambda m: re.sub(r"(ignore all|reveal the system prompt|you are now)[^\.]*\.", "", m.group(0), flags=re.IGNORECASE),  # noqa: E501
         context,
         flags=re.DOTALL | re.IGNORECASE,
     )
 
     lower_q = question.lower()
-    
+
     # Financial queries
     if "revenue" in lower_q or "financial" in lower_q or "margin" in lower_q:
         if "34.2%" in clean_context or "gross margin" in clean_context:
@@ -68,7 +67,7 @@ def _mock_grounded_response(system_prompt: str, user_prompt: str) -> str:
         if "Sentinel AMR" in clean_context:
             return (
                 "Based on the engineering architecture notes: The Sentinel AMR uses a three-layer navigation stack "
-                "(perception, planning, and real-time control). A known limitation is false positive obstacle detection "
+                "(perception, planning, and real-time control). A known limitation is false positive obstacle detection "  # noqa: E501
                 "caused by reflective mylar-wrapped pallets, with a depth camera sensor fusion fix planned for Q3."
             )
 
@@ -77,7 +76,7 @@ def _mock_grounded_response(system_prompt: str, user_prompt: str) -> str:
         if "onboarding" in clean_context:
             return (
                 "According to the internal HR policy: New engineering hires complete a two-week onboarding program "
-                "including safety certification for warehouse robotics. Employees are entitled to 18 days of paid leave annually."
+                "including safety certification for warehouse robotics. Employees are entitled to 18 days of paid leave annually."  # noqa: E501
             )
 
     # Fallback: extract sentences from context matching query keywords
@@ -93,89 +92,10 @@ def _mock_grounded_response(system_prompt: str, user_prompt: str) -> str:
 
 def call_llm(system_prompt: str, user_prompt: str) -> str:
     """
-    Dispatches generation to the configured LLM provider.
-    Supports groq, openai, anthropic, gemini, and mock.
-    Falls back to mock mode if provider API key is not configured.
+    Generates an answer with the configured provider chain (LLM_PROVIDER + LLM_FALLBACKS).
+    Kept for backwards compatibility; the pipeline uses ``LLMRouter`` directly to record
+    which provider answered and how many attempts it took.
     """
-    provider = os.getenv("LLM_PROVIDER", "mock").lower()
+    from securerag.llm.router import LLMRouter
 
-    if provider == "mock":
-        return _mock_grounded_response(system_prompt, user_prompt)
-
-    if provider == "groq":
-        api_key = os.getenv("GROQ_API_KEY")
-        if not api_key:
-            logger.info("GROQ_API_KEY not set; using deterministic mock provider.")
-            return _mock_grounded_response(system_prompt, user_prompt)
-        try:
-            from groq import Groq
-            client = Groq(api_key=api_key)
-            response = client.chat.completions.create(
-                model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-            )
-            return response.choices[0].message.content or ""
-        except Exception as e:
-            logger.warning(f"Groq generation failed ({e}); falling back to mock response.")
-            return _mock_grounded_response(system_prompt, user_prompt)
-
-    if provider == "openai":
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            logger.info("OPENAI_API_KEY not set; using deterministic mock provider.")
-            return _mock_grounded_response(system_prompt, user_prompt)
-        try:
-            from openai import OpenAI
-            client = OpenAI(api_key=api_key)
-            response = client.chat.completions.create(
-                model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-            )
-            return response.choices[0].message.content or ""
-        except Exception as e:
-            logger.warning(f"OpenAI generation failed ({e}); falling back to mock response.")
-            return _mock_grounded_response(system_prompt, user_prompt)
-
-    if provider == "anthropic":
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
-            logger.info("ANTHROPIC_API_KEY not set; using deterministic mock provider.")
-            return _mock_grounded_response(system_prompt, user_prompt)
-        try:
-            import anthropic
-            client = anthropic.Anthropic(api_key=api_key)
-            response = client.messages.create(
-                model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
-                max_tokens=800,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_prompt}],
-            )
-            return response.content[0].text
-        except Exception as e:
-            logger.warning(f"Anthropic generation failed ({e}); falling back to mock response.")
-            return _mock_grounded_response(system_prompt, user_prompt)
-
-    if provider == "gemini":
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            logger.info("GEMINI_API_KEY not set; using deterministic mock provider.")
-            return _mock_grounded_response(system_prompt, user_prompt)
-        try:
-            from google import genai
-            client = genai.Client(api_key=api_key)
-            response = client.models.generate_content(
-                model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
-                contents=f"{system_prompt}\n\n{user_prompt}",
-            )
-            return response.text or ""
-        except Exception as e:
-            logger.warning(f"Gemini generation failed ({e}); falling back to mock response.")
-            return _mock_grounded_response(system_prompt, user_prompt)
-
-    raise ValueError(f"Unknown LLM_PROVIDER: {provider}")
+    return LLMRouter.from_env().generate(system_prompt, user_prompt).text

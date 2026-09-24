@@ -13,10 +13,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from securerag.evaluation.runner import run_evaluation_suite
 from securerag.evaluation.security import (
     evaluate_prompt_injection as _eval_inj,
+)
+from securerag.evaluation.security import (
     evaluate_rbac_policy_leak_rate as _eval_rbac,
 )
-from securerag.evaluation.retrieval import evaluate_retrieval
-from securerag.evaluation.performance import evaluate_performance
 
 
 def evaluate_prompt_injection(samples=None):

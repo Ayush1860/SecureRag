@@ -2,14 +2,13 @@ import json
 from pathlib import Path
 
 import pytest
+from conftest import SAMPLE_DOCS, FakeEncoder, ingest, make_settings, store_for, write_docs
 
 from securerag.pipeline.graph import SecureRAG
 from securerag.retrieval import sparse as sparse_mod
 from securerag.retrieval.store import StoreKeyError, StoreNotReadyError, open_serving_stack
 from securerag.security.encryption import VectorStoreEncryptor
 from securerag.security.rbac import authorize, build_chroma_filter
-
-from conftest import SAMPLE_DOCS, FakeEncoder, ingest, make_settings, store_for, write_docs
 
 PLAINTEXT_MARKERS = ["gross margin", "34.2", "240 crore", "Sentinel AMR", "paid leave"]
 

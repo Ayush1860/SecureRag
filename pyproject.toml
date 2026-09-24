@@ -50,3 +50,31 @@ include = ["securerag*"]
 pythonpath = ["."]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["notebooks", "frontend", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I", "UP"]
+ignore = ["B008", "B905"]  # B008: FastAPI Depends() defaults; B905: zip strictness adds noise here
+
+[tool.ruff.lint.per-file-ignores]
+"app/streamlit_app.py" = ["E501", "E402"]
+"securerag/evaluation/runner.py" = ["E501"]
+"tests/*" = ["B017"]
+"scripts/*" = ["E402"]
+"securerag/retrieval/store.py" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["securerag", "app", "scripts"]
+known-third-party = ["conftest"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+check_untyped_defs = true

@@ -1,8 +1,8 @@
-import os
 import pytest
-from securerag.security.encryption import VectorStoreEncryptor, DecryptionError
+
+from securerag.security.audit import audit_event, read_recent_audit_events
+from securerag.security.encryption import DecryptionError, VectorStoreEncryptor
 from securerag.security.rbac import (
-    ROLE_POLICY,
     AccessControlError,
     authorize,
     build_chroma_filter,
@@ -13,8 +13,6 @@ from securerag.security.sanitizer import (
     flag_suspicious,
     sanitize_chunk,
 )
-from securerag.security.audit import audit_event, read_recent_audit_events
-
 
 # --- Encryption Tests ---
 

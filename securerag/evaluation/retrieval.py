@@ -4,7 +4,9 @@ Computes Recall@K, Precision@K, and Mean Reciprocal Rank (MRR)
 over hybrid dense + sparse retrieval with RBAC enforcement.
 """
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
+
 from securerag.evaluation.datasets import RETRIEVAL_BENCHMARK_CASES, RetrievalCase
 from securerag.retrieval.hybrid import HybridRetriever
 from securerag.security.rbac import build_chroma_filter
@@ -63,7 +65,7 @@ def evaluate_retrieval(
             top_k_sources = retrieved_sources[:k]
             hits = sum(1 for src in top_k_sources if src in targets)
             query_hits_at_k[k] = hits
-            
+
             # Recall@K = relevant documents retrieved in top K / total relevant documents
             rec = hits / len(targets) if targets else 0.0
             per_query_recall[k].append(rec)

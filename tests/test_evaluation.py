@@ -1,35 +1,30 @@
-import json
-from pathlib import Path
 import pytest
+
+from scripts.evaluate import (
+    evaluate_prompt_injection as compat_evaluate_prompt_injection,
+)
+from scripts.evaluate import (
+    evaluate_rbac_leak_rate as compat_evaluate_rbac_leak_rate,
+)
 from securerag.config import get_settings
 from securerag.evaluation.datasets import (
     INJECTION_BENCHMARK_CASES,
     RETRIEVAL_BENCHMARK_CASES,
-    RBAC_POLICY_TEST_CASES,
-    CROSS_BOUNDARY_QUERY_CASES,
-)
-from securerag.evaluation.retrieval import evaluate_retrieval
-from securerag.evaluation.security import (
-    evaluate_prompt_injection,
-    evaluate_rbac_policy_leak_rate,
-    evaluate_cross_boundary_retrieval_leak_rate,
-    evaluate_security,
 )
 from securerag.evaluation.performance import (
-    evaluate_embedding_latency,
-    evaluate_retrieval_latency,
-    evaluate_generation_latency,
-    evaluate_end_to_end_latency,
     evaluate_performance,
 )
-from securerag.evaluation.runner import generate_markdown_report, run_evaluation_suite
+from securerag.evaluation.retrieval import evaluate_retrieval
+from securerag.evaluation.runner import generate_markdown_report
+from securerag.evaluation.security import (
+    evaluate_cross_boundary_retrieval_leak_rate,
+    evaluate_prompt_injection,
+    evaluate_rbac_policy_leak_rate,
+    evaluate_security,
+)
 from securerag.pipeline.graph import SecureRAG
 from securerag.retrieval.store import open_serving_stack, run_ingestion
 from securerag.security.encryption import VectorStoreEncryptor
-from scripts.evaluate import (
-    evaluate_prompt_injection as compat_evaluate_prompt_injection,
-    evaluate_rbac_leak_rate as compat_evaluate_rbac_leak_rate,
-)
 
 
 @pytest.fixture(scope="module")
@@ -102,7 +97,7 @@ def test_unified_security_evaluation(rag_components):
 def test_retrieval_metrics(rag_components):
     retriever = rag_components["retriever"]
     stats = evaluate_retrieval(retriever, RETRIEVAL_BENCHMARK_CASES, ks=(1, 3, 5))
-    
+
     assert stats["total_queries"] == len(RETRIEVAL_BENCHMARK_CASES)
     # Recall@K monotonically non-decreasing
     assert stats["recall_at_k"][1] <= stats["recall_at_k"][3] <= stats["recall_at_k"][5]

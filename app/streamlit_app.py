@@ -1,7 +1,6 @@
 import os
 import sys
 from pathlib import Path
-from datetime import datetime
 
 # Ensure project root is on sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -19,7 +18,6 @@ from securerag.retrieval.store import build_engine, open_serving_stack
 from securerag.security.audit import read_recent_audit_events
 from securerag.security.encryption import VectorStoreEncryptor
 from securerag.security.rbac import ROLE_POLICY
-from securerag.pipeline.graph import SecureRAG
 
 load_dotenv()
 
@@ -41,7 +39,7 @@ st.markdown(
         color: #f8fafc;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
-    
+
     /* Header & Badges */
     .hero-title {
         font-size: 2.1rem;
@@ -310,7 +308,7 @@ result = st.session_state.last_result
 if result:
     st.markdown("---")
     c1, c2, c3, c4, c5 = st.columns(5)
-    
+
     with c1:
         st.markdown(
             f"""
@@ -379,7 +377,7 @@ if result:
             """
             <div class="threat-banner">
                 <h4>⚠️ Prompt Injection Neutralized</h4>
-                <div>Retrieved document excerpts contained adversarial instruction directives. 
+                <div>Retrieved document excerpts contained adversarial instruction directives.
                 Content was quarantined inside <code>[UNTRUSTED_DOCUMENT_CONTENT]</code> delimiters to prevent model hijacking.</div>
             </div>
             """,

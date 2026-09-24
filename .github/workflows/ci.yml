@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  USE_TF: "0"
+  LLM_PROVIDER: mock
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install "ruff>=0.6" "mypy>=1.10" "types-PyYAML" pydantic pydantic-settings
+      - name: ruff
+        run: ruff check securerag app scripts tests
+      - name: mypy
+        run: mypy securerag
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ runner.os }}-minilm-v1
+      - name: Install (CPU torch)
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.2,<3"
+          pip install -r requirements.txt
+      - name: pytest
+        run: pytest -q
+      - name: Scale smoke benchmark (fails on any canary leak)
+        run: python scripts/benchmark_scale.py --docs 300 --queries-per-role 50 --label ci_docs_300 --out reports/ci --fail-on-leak
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scale-benchmark
+          path: reports/ci/
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend

@@ -56,7 +56,7 @@ python scripts/ingest.py
 
 # 6. Launch the frontend UI
 # Option A: Streamlit interactive frontend
-streamlit run streamlit_app.py
+streamlit run app/streamlit_app.py
 
 # Option B: FastAPI service + static web UI
 uvicorn app.api:app --reload --port 8000

@@ -8,17 +8,16 @@ import json
 import os
 import platform
 import sys
-import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from securerag.config import get_settings
 from securerag.evaluation.datasets import (
-    INJECTION_BENCHMARK_CASES,
-    RETRIEVAL_BENCHMARK_CASES,
-    RBAC_POLICY_TEST_CASES,
     CROSS_BOUNDARY_QUERY_CASES,
+    INJECTION_BENCHMARK_CASES,
+    RBAC_POLICY_TEST_CASES,
+    RETRIEVAL_BENCHMARK_CASES,
 )
 from securerag.evaluation.performance import evaluate_performance
 from securerag.evaluation.retrieval import evaluate_retrieval
@@ -44,8 +43,8 @@ def generate_markdown_report(report_data: dict[str, Any]) -> str:
         f"**Generated**: {meta.get('timestamp', 'N/A')}  ",
         f"**Environment**: Python {meta.get('python_version', 'N/A')} on {meta.get('platform', 'N/A')}  ",
         f"**LLM Provider**: `{meta.get('llm_provider', 'mock')}` (Deterministic offline mode)  ",
-        f"**Embedding Model**: `all-MiniLM-L6-v2` (384-dimensional dense vectors)  ",
-        f"**Vector Store**: ChromaDB with AES-256-GCM encrypted document payloads  ",
+        "**Embedding Model**: `all-MiniLM-L6-v2` (384-dimensional dense vectors)  ",
+        "**Vector Store**: ChromaDB with AES-256-GCM encrypted document payloads  ",
         "",
         "---",
         "",
@@ -236,7 +235,7 @@ def run_evaluation_suite(
     print(f"  End-to-End Latency (P95)  : {perf_results['end_to_end_latency']['p95']:.2f} ms")
 
     # Construct final payload
-    timestamp = datetime.now(timezone.utc).isoformat()
+    timestamp = datetime.now(UTC).isoformat()
     # Clean up non-string dict keys for JSON compatibility (e.g. integer k in dicts)
     clean_retrieval = {
         "total_queries": ret_results["total_queries"],

@@ -6,6 +6,7 @@ sample, and opens the sparse index lazily. A wrong key is a hard startup error; 
 re-encrypt is an explicit ``scripts/ingest.py --full-rebuild`` (or key rotation, Phase 4).
 """
 import os
+
 os.environ.setdefault("USE_TF", "0")
 os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
 
@@ -109,9 +110,11 @@ def build_engine(settings: Settings, encryptor: VectorStoreEncryptor, stack: "Se
         from securerag.retrieval.rerank import CrossEncoderReranker
 
         reranker = CrossEncoderReranker(settings.rerank_model, settings.embed_device)
+    from securerag.llm.router import LLMRouter
+
     return SecureRAG(stack.store, stack.retriever, encryptor, audit_path or settings.audit_log_path,
                      reranker=reranker, rerank_top_n=settings.rerank_top_n,
-                     context_token_budget=settings.context_token_budget)
+                     context_token_budget=settings.context_token_budget, llm=LLMRouter.from_env(settings))
 
 
 @dataclass

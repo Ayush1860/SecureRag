@@ -15,9 +15,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from securerag.security.rbac import ROLE_POLICY
 
@@ -123,7 +124,7 @@ class Authenticator:
         if not auth.lower().startswith("bearer "):
             raise AuthError("missing bearer token")
         token = auth[7:].strip()
-        options = {"require": ["exp", "sub"]}
+        options: dict[str, Any] = {"require": ["exp", "sub"]}
         kwargs: dict[str, Any] = {}
         if self.settings.jwt_audience:
             kwargs["audience"] = self.settings.jwt_audience
@@ -132,7 +133,7 @@ class Authenticator:
             kwargs["issuer"] = self.settings.jwt_issuer
             options["require"].append("iss")
         try:
-            claims = jwt.decode(token, self._jwt_key, algorithms=[self._jwt_alg], options=options,
+            claims = jwt.decode(token, self._jwt_key, algorithms=[self._jwt_alg], options=options,  # type: ignore[arg-type]
                                 leeway=self.settings.jwt_leeway_seconds, **kwargs)
         except jwt.ExpiredSignatureError as exc:
             raise AuthError("token expired") from exc
