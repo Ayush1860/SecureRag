@@ -28,6 +28,12 @@ dependencies = [
     "google-genai>=0.1,<2",
     "streamlit>=1.35,<2",
     "psutil>=5.9,<8",
+    "pydantic-settings>=2.4,<3",
+    "PyYAML>=6.0,<7",
+    "pypdf>=4.0,<7",
+    "python-docx>=1.1,<2",
+    "beautifulsoup4>=4.12,<5",
+    "tqdm>=4.66,<5",
 ]
 
 [project.optional-dependencies]

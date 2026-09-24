@@ -33,3 +33,7 @@ def authorize(user_role: str, metadata: dict) -> bool:
     max_level = CLEARANCE_LEVELS[policy["max_clearance"]]
     chunk_level = CLEARANCE_LEVELS.get(metadata.get("clearance", "confidential"), 99)
     return chunk_level <= max_level and metadata.get("department") in policy["departments"]
+
+
+# Every department referenced by some role. Ingestion rejects documents labelled with anything else.
+DEPARTMENTS: frozenset[str] = frozenset(d for policy in ROLE_POLICY.values() for d in policy["departments"])

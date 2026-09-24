@@ -3,53 +3,62 @@ os.environ.setdefault("USE_TF", "0")
 os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
 
 import logging
-import uuid
-from pathlib import Path
-import chromadb
-from sentence_transformers import SentenceTransformer
+from typing import Any
 
-from securerag.ingestion.loader import load_tagged_documents, chunk_text
+from securerag.config import Settings, get_settings
+from securerag.ingestion.pipeline import IngestPipeline, IngestReport, ProgressFn
+from securerag.ingestion.state import IngestState
+from securerag.retrieval.embedder import get_encoder
 from securerag.retrieval.hybrid import Chunk
+from securerag.retrieval.vector_store import COLLECTION_NAME, ChromaVectorStore
 from securerag.security.encryption import VectorStoreEncryptor, DecryptionError
 
 logger = logging.getLogger(__name__)
 
-EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-COLLECTION_NAME = "securerag_chunks"
+__all__ = ["COLLECTION_NAME", "build_store", "load_store", "open_vector_store", "run_ingestion"]
+
+
+def _settings_for(data_dir: str | None = None, chroma_dir: str | None = None) -> Settings:
+    settings = get_settings()
+    update = {k: v for k, v in {"data_dir": data_dir, "chroma_dir": chroma_dir}.items() if v is not None}
+    return settings.model_copy(update=update) if update else settings
+
+
+def open_vector_store(settings: Settings) -> ChromaVectorStore:
+    return ChromaVectorStore(settings.chroma_dir)
+
+
+def run_ingestion(
+    settings: Settings,
+    encryptor: VectorStoreEncryptor,
+    *,
+    data_dir: str | None = None,
+    full_rebuild: bool = False,
+    dry_run: bool = False,
+    workers: int = 1,
+    progress: ProgressFn | None = None,
+    encoder: Any = None,
+) -> IngestReport:
+    """Run the streaming ingestion pipeline against the configured store."""
+    encoder = encoder or get_encoder(settings.embed_model, settings.embed_device)
+    store = None if dry_run else open_vector_store(settings)
+    state = IngestState(settings.resolved_state_db_path)
+    try:
+        pipeline = IngestPipeline(settings, encryptor, store, state, encoder=encoder)
+        return pipeline.run(data_dir or settings.data_dir, full_rebuild=full_rebuild, dry_run=dry_run,
+                            workers=workers, progress=progress)
+    finally:
+        state.close()
 
 
 def build_store(data_dir: str, chroma_dir: str, encryptor: VectorStoreEncryptor):
     """
-    Ingests raw documents from data_dir, chunks them, encrypts payload text with AES-256-GCM,
-    generates dense embeddings, and stores them in a persistent ChromaDB collection.
+    Rebuilds the store from data_dir (full rebuild) and returns (client, collection, encoder, chunks).
+    Kept for callers of the original API; new code should use ``run_ingestion``.
     """
-    docs = list(load_tagged_documents(data_dir))
-    rows = []
-    for text, meta in docs:
-        for piece in chunk_text(text):
-            rows.append((piece, meta))
-
-    encoder = SentenceTransformer(EMBED_MODEL)
-    embeddings = encoder.encode([r[0] for r in rows], normalize_embeddings=True, convert_to_numpy=True)
-
-    Path(chroma_dir).mkdir(parents=True, exist_ok=True)
-    client = chromadb.PersistentClient(path=chroma_dir)
-    try:
-        client.delete_collection(COLLECTION_NAME)
-    except Exception:
-        pass
-    collection = client.get_or_create_collection(COLLECTION_NAME)
-
-    ids, payloads, metas = [], [], []
-    for text, meta in rows:
-        ids.append(str(uuid.uuid4()))
-        payloads.append(encryptor.encrypt(text))
-        metas.append(meta)
-
-    collection.add(ids=ids, embeddings=embeddings.tolist(), documents=payloads, metadatas=metas)
-
-    chunks = [Chunk(id=i, encrypted_text=e, text=t, metadata=m) for i, e, (t, m) in zip(ids, payloads, rows)]
-    return client, collection, encoder, chunks
+    settings = _settings_for(data_dir, chroma_dir)
+    run_ingestion(settings, encryptor, full_rebuild=True)
+    return load_store(chroma_dir, data_dir, encryptor)
 
 
 def load_store(chroma_dir: str, data_dir: str, encryptor: VectorStoreEncryptor):
@@ -57,19 +66,17 @@ def load_store(chroma_dir: str, data_dir: str, encryptor: VectorStoreEncryptor):
     Loads persistent ChromaDB collection and verifies that encrypted payloads can be authenticated.
     If empty or if key mismatch is detected, re-indexes the corpus.
     """
-    client = chromadb.PersistentClient(path=chroma_dir)
-    collection = client.get_or_create_collection(COLLECTION_NAME)
-    if collection.count() == 0:
+    settings = _settings_for(data_dir, chroma_dir)
+    store = open_vector_store(settings)
+    if store.count() == 0:
         return build_store(data_dir, chroma_dir, encryptor)
 
-    encoder = SentenceTransformer(EMBED_MODEL)
+    encoder = get_encoder(settings.embed_model, settings.embed_device)
     chunks = []
-    data = collection.get(include=["documents", "metadatas"])
-
     try:
-        for cid, enc, meta in zip(data["ids"], data["documents"], data["metadatas"]):
-            decrypted = encryptor.decrypt(enc)
-            chunks.append(Chunk(id=cid, encrypted_text=enc, text=decrypted, metadata=meta))
+        for batch in store.iter_all():
+            for cid, enc, meta in batch:
+                chunks.append(Chunk(id=cid, encrypted_text=enc, text=encryptor.decrypt(enc), metadata=meta))
     except DecryptionError as exc:
         logger.warning(
             "Encrypted payloads in %s cannot be authenticated with current AES key (%s). "
@@ -79,4 +86,4 @@ def load_store(chroma_dir: str, data_dir: str, encryptor: VectorStoreEncryptor):
         )
         return build_store(data_dir, chroma_dir, encryptor)
 
-    return client, collection, encoder, chunks
+    return store.client, store.collection, encoder, chunks

@@ -12,3 +12,4 @@ dist/
 .DS_Store
 data/synthetic/
 data/bench/
+data/*_state.sqlite*

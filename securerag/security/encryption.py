@@ -1,7 +1,11 @@
 import base64
+import hashlib
+import hmac
 import os
 import logging
 from Crypto.Cipher import AES
+from Crypto.Hash import SHA256
+from Crypto.Protocol.KDF import HKDF
 from Crypto.Random import get_random_bytes
 
 logger = logging.getLogger(__name__)
@@ -65,3 +69,25 @@ class VectorStoreEncryptor:
 
     def export_key_b64(self) -> str:
         return base64.b64encode(self.key).decode("ascii")
+
+    def derive_subkey(self, label: str) -> bytes:
+        """32-byte subkey for ``label`` via HKDF-SHA256, independent of the AES key itself."""
+        return HKDF(self.key, 32, salt=b"securerag", hashmod=SHA256, context=label.encode("utf-8"))
+
+    @property
+    def key_id(self) -> str:
+        """Short non-secret identifier of the active key (safe to store in metadata)."""
+        return hmac.new(self.derive_subkey("securerag/key-id/v1"), b"key-id", hashlib.sha256).hexdigest()[:12]
+
+
+INDEX_KEY_LABEL = "securerag/index/v1"
+
+
+def keyed_hash(key: bytes, *parts: str, length: int = 32) -> str:
+    """HMAC-SHA256 over ``parts`` joined by NUL, hex-truncated to ``length``.
+
+    Used for chunk IDs, content hashes and file fingerprints so values derived from plaintext
+    cannot be confirmed by someone who can read the store but does not hold the key.
+    """
+    mac = hmac.new(key, "\x00".join(parts).encode("utf-8"), hashlib.sha256)
+    return mac.hexdigest()[:length]

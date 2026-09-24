@@ -50,11 +50,13 @@ ROLES = ["guest", "employee", "finance_lead", "exec"]
 # --------------------------------------------------------------------------------------
 
 def _ingest_corpus(data_dir: str, chroma_dir: str) -> dict[str, Any]:
-    from securerag.retrieval.store import build_store
+    from securerag.config import get_settings
+    from securerag.retrieval.store import open_vector_store, run_ingestion
     from securerag.security.encryption import VectorStoreEncryptor
 
-    _, collection, _, _ = build_store(data_dir, chroma_dir, VectorStoreEncryptor())
-    return {"chunks": collection.count()}
+    settings = get_settings().model_copy(update={"data_dir": data_dir, "chroma_dir": chroma_dir})
+    report = run_ingestion(settings, VectorStoreEncryptor(), full_rebuild=True)
+    return {"chunks": open_vector_store(settings).count(), "report": report.as_dict()}
 
 
 def _open_engine(data_dir: str, chroma_dir: str, audit_path: str):
