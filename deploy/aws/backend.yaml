@@ -1,0 +1,322 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  SecureRAG demo backend - FastAPI in a Lambda container image behind a Function URL, with an ECR
+  repo and a GitHub OIDC deploy role. Built to stay inside the free tier: capped concurrency,
+  7-day logs, 2 retained images, secrets read from SSM at runtime, no NAT, no always-on compute.
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  com.aws.cloudformation.Context:
+    arch: >-
+      GitHub Actions (OIDC) builds the image and pushes it to ECR, then updates the Lambda function.
+      The browser (Amplify-hosted React) calls the Function URL. The function reads the AES key and
+      the hashed API keys from SSM /securerag/* at cold start.
+    must:
+      - Two-pass deploy. Pass 1 with ImageUri empty creates ECR + the deploy role; pass 2 with
+        ImageUri set creates the function (a container Lambda needs an existing image).
+      - No secrets in parameters, environment variables or Metadata. Only SSM parameter names.
+      - Function URL AuthType NONE is intentional; the app enforces API-key auth and RBAC itself.
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: {default: Image}
+        Parameters: [ImageUri]
+      - Label: {default: Access}
+        Parameters: [AmplifyOrigin, GitHubRepo, GitHubBranch]
+      - Label: {default: "Secrets (SSM parameter names, not values)"}
+        Parameters: [AesKeyParam, ApiKeysParam, GroqKeyParam]
+
+Parameters:
+  ImageUri:
+    Type: String
+    Default: ""
+    Description: >-
+      ECR image URI for the function (<repo-uri>:<git-sha>). Leave empty on the first deploy;
+      set it after the first image push.
+  AmplifyOrigin:
+    Type: String
+    Default: https://localhost.invalid
+    AllowedPattern: ^https://[A-Za-z0-9.-]+(:[0-9]+)?$
+    Description: Origin allowed by the Function URL's CORS (e.g. https://main.d123abc.amplifyapp.com).
+  GitHubRepo:
+    Type: String
+    Default: Ayush1860/SecureRag
+    AllowedPattern: ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$
+  GitHubBranch:
+    Type: String
+    Default: main
+    AllowedPattern: ^[A-Za-z0-9_./-]+$
+  AesKeyParam:
+    Type: String
+    Default: /securerag/aes_key_b64
+    AllowedPattern: ^/securerag/.+$
+  ApiKeysParam:
+    Type: String
+    Default: /securerag/api_keys_json
+    AllowedPattern: ^/securerag/.+$
+  GroqKeyParam:
+    Type: String
+    Default: /securerag/groq_api_key
+    AllowedPattern: ^/securerag/.+$
+
+Conditions:
+  HasImage: !Not [!Equals [!Ref ImageUri, ""]]
+
+Resources:
+  Repository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          Holds the Lambda images. The lifecycle policy keeps the newest 2 (current + rollback
+          target), so storage stays around $0.20/month. Images can be rebuilt from git, so the
+          repo is deleted with the stack (EmptyOnDelete) instead of retained.
+        must:
+          - Keep at least 2 images, because the deploy workflow rolls back to the previous tag.
+          - Tags are immutable git SHAs; the workflow never overwrites a tag.
+    Properties:
+      RepositoryName: !Sub ${AWS::StackName}-api
+      ImageTagMutability: IMMUTABLE
+      EmptyOnDelete: true
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules": [{"rulePriority": 1, "description": "keep the newest 2 images",
+            "selection": {"tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 2},
+            "action": {"type": "expire"}}]}
+      Tags:
+        - {Key: project, Value: securerag}
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: HasImage
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          Function logs, including the JSON audit entries written to stdout. Retention is 7 days
+          to keep storage near $0; the demo holds no real data.
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-api
+      RetentionInDays: 7
+      Tags:
+        - {Key: project, Value: securerag}
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          Runtime identity of the function: write to its own log group and read the /securerag/*
+          SecureStrings. kms:Decrypt is limited to calls made through SSM in this region.
+        must:
+          - No wildcard actions. Resources limited to this function's log group and /securerag/*.
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-api:*
+        - PolicyName: ssm-secrets
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [ssm:GetParameter, ssm:GetParameters]
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/securerag/*
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: !Sub arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
+      Tags:
+        - {Key: project, Value: securerag}
+
+  Function:
+    Type: AWS::Lambda::Function
+    Condition: HasImage
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          FastAPI via Lambda Web Adapter. 3008 MB gives ~2 vCPU for torch. Timeout 60 s covers the
+          first request after a ~20 s cold start. /tmp at 1024 MB holds the copied demo index.
+          Reserved concurrency 2 caps cost and abuse; Lambda's always-free tier covers demo traffic.
+        must:
+          - ReservedConcurrentExecutions stays small (cost/abuse cap). Never add provisioned
+            concurrency.
+          - Environment holds SSM parameter names only, never secret values.
+        mutability:
+          Code: free-to-tune
+          ReservedConcurrentExecutions: review-required
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-api
+      PackageType: Image
+      Code:
+        ImageUri: !Ref ImageUri
+      Architectures: [x86_64]
+      MemorySize: 3008
+      Timeout: 60
+      EphemeralStorage:
+        Size: 1024
+      ReservedConcurrentExecutions: 2
+      Role: !GetAtt ExecutionRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref LogGroup
+        LogFormat: Text
+      Environment:
+        Variables:
+          SSM_AES_KEY_PARAM: !Ref AesKeyParam
+          SSM_API_KEYS_PARAM: !Ref ApiKeysParam
+          SSM_GROQ_KEY_PARAM: !Ref GroqKeyParam
+          LLM_PROVIDER: groq
+          LLM_FALLBACKS: refusal
+          RATE_LIMIT: 20/minute
+          LOG_LEVEL: INFO
+      Tags:
+        - {Key: project, Value: securerag}
+
+  FunctionUrl:
+    Type: AWS::Lambda::Url
+    Condition: HasImage
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          Free HTTPS endpoint, which the HTTPS Amplify page needs. CORS is answered here (the app
+          doesn't add its own CORS middleware in Lambda mode), limited to the Amplify origin.
+        must:
+          - AllowOrigins holds exactly the Amplify origin; never "*".
+    Properties:
+      TargetFunctionArn: !GetAtt Function.Arn
+      AuthType: NONE
+      Cors:
+        AllowOrigins: [!Ref AmplifyOrigin]
+        AllowMethods: [GET, POST]
+        AllowHeaders: [authorization, content-type, x-api-key, x-request-id]
+        ExposeHeaders: [x-request-id]
+        MaxAge: 600
+
+  FunctionUrlPublicInvoke:
+    Type: AWS::Lambda::Permission
+    Condition: HasImage
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Public access to the Function URL (AuthType NONE requires this resource policy).
+    Properties:
+      FunctionName: !Ref Function
+      Action: lambda:InvokeFunctionUrl
+      Principal: "*"
+      FunctionUrlAuthType: NONE
+
+  FunctionUrlInvokeViaUrl:
+    Type: AWS::Lambda::Permission
+    Condition: HasImage
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          Function URL invocations need lambda:InvokeFunction as well. InvokedViaFunctionUrl limits
+          this grant to URL calls, so direct Invoke stays closed.
+    Properties:
+      FunctionName: !Ref Function
+      Action: lambda:InvokeFunction
+      Principal: "*"
+      InvokedViaFunctionUrl: true
+
+  DeployRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          Assumed by GitHub Actions through OIDC (no long-lived AWS keys in GitHub). It can push to
+          this ECR repo, read the one SSM parameter needed at image build time (the AES key for the
+          encrypted demo index), and update or read this one function.
+        must:
+          - Trust limited to repo GitHubRepo on refs/heads/GitHubBranch with audience sts.amazonaws.com.
+          - ecr:GetAuthorizationToken is the only action on "*" (it has no resource-level scoping).
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepo}:ref:refs/heads/${GitHubBranch}
+      MaxSessionDuration: 3600
+      Policies:
+        - PolicyName: ecr-push
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:CompleteLayerUpload
+                  - ecr:DescribeImages
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource: !GetAtt Repository.Arn
+        - PolicyName: lambda-deploy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [lambda:UpdateFunctionCode, lambda:GetFunction, lambda:GetFunctionConfiguration]
+                Resource: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-api
+        - PolicyName: build-secret
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AesKeyParam}
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: !Sub arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
+      Tags:
+        - {Key: project, Value: securerag}
+
+Outputs:
+  FunctionUrl:
+    Condition: HasImage
+    Description: Public HTTPS endpoint (set as VITE_API_BASE in Amplify and FUNCTION_URL in GitHub).
+    Value: !GetAtt FunctionUrl.FunctionUrl
+  FunctionName:
+    Description: Lambda function name the deploy workflow updates.
+    Value: !Sub ${AWS::StackName}-api
+  EcrRepositoryUri:
+    Description: Push images here (tag = git SHA).
+    Value: !GetAtt Repository.RepositoryUri
+  DeployRoleArn:
+    Description: Role assumed by .github/workflows/deploy-backend.yml (AWS_DEPLOY_ROLE_ARN).
+    Value: !GetAtt DeployRole.Arn

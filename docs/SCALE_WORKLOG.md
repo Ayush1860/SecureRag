@@ -843,3 +843,66 @@ without `VITE_API_BASE`.
 - The `lambda` image build (no local Docker). The docker-bench workflow now builds and inspects it.
 - LWA 0.8.4's async-init behaviour on real Lambda. Check the first cold start's `INIT_REPORT` in
   CloudWatch.
+
+## Prompt 3 — Infrastructure and deploy pipeline
+
+### Added
+- `deploy/aws/backend.yaml` (CloudFormation; cfn-lint clean for ap-south-1; every resource tagged
+  `project=securerag`; skill conventions: `Description`, `com.aws.cloudformation.Context`
+  why/must on each resource, the `aws-cloudformation@3` marker). Resources:
+  - **ECR**: scan on push, immutable SHA tags, lifecycle keeps 2 images, `EmptyOnDelete` so
+    teardown removes the images. Images can be rebuilt from git, so the repo isn't retained.
+  - **Lambda**: image, x86_64, 3008 MB, 60 s, `/tmp` 1024 MB, reserved concurrency 2.
+    `LoggingConfig` points at a 7-day log group. The environment holds only SSM parameter names
+    (plus `LLM_PROVIDER=groq`, `RATE_LIMIT=20/minute`).
+  - **Function URL**: `AuthType NONE`, CORS locked to the `AmplifyOrigin` parameter, methods
+    GET/POST, headers authorization/content-type/x-api-key/x-request-id. There are **two**
+    `AWS::Lambda::Permission`s: `InvokeFunctionUrl` (public) and `InvokeFunction` with
+    `InvokedViaFunctionUrl: true`. A URL call needs both; the aws-serverless skill notes that
+    granting only the first returns 403.
+  - **Execution role**: logs on its own log group; `ssm:GetParameter(s)` on
+    `parameter/securerag/*`; `kms:Decrypt` with `kms:ViaService = ssm.<region>`; trust limited by
+    `aws:SourceAccount`.
+  - **Deploy role (GitHub OIDC)**: trust requires `aud=sts.amazonaws.com` and
+    `sub=repo:<GitHubRepo>:ref:refs/heads/<GitHubBranch>`. It may push to this repo only
+    (`ecr:GetAuthorizationToken` is the one `*` resource, because it can't be scoped) and call
+    `UpdateFunctionCode`, `GetFunction` and `GetFunctionConfiguration` on this function only.
+    **Deviation from the plan:** the plan listed only `UpdateFunctionCode`. `GetFunction` is
+    needed to read the current image for rollback, and `GetFunctionConfiguration` for
+    `aws lambda wait function-updated-v2`. It can also read the single AES-key parameter needed
+    for the build-time encrypted index (the option (a) choice from Prompt 2).
+  - **Two-pass deploy** through the `HasImage` condition: a container function can't be created
+    before an image exists. Pass 1 creates ECR and the roles; pass 2 with `ImageUri` creates the
+    function, URL and log group.
+  - Outputs: `FunctionUrl`, `FunctionName`, `EcrRepositoryUri`, `DeployRoleArn`.
+- `.github/workflows/deploy-backend.yml` (`workflow_dispatch`, and pushes to main touching
+  `securerag/`, `app/`, `Dockerfile` or `requirements.txt`). Steps:
+  1. OIDC login, then fetch the AES key from SSM (umask 077, masked).
+  2. `buildx --target lambda --provenance=false --sbom=false`, because Lambda rejects image
+     indexes. The key goes in as a secret and is deleted after the build.
+  3. Push `:<sha>`.
+  4. Record the previous image URI, `update-function-code`, and wait.
+  5. `smoke_api.py` against the Function URL with every demo key.
+  6. **On failure, roll back to the previous image.**
+  The job is skipped while `vars.AWS_DEPLOY_ROLE_ARN` is unset, so pushes before setup don't fail.
+- `scripts/create_demo_keys.py`: guest/employee/exec keys. The plaintext JSON goes to stdout
+  once (for the GitHub secret `DEMO_KEYS_JSON` and the demo page); the hashed JSON goes to a file
+  for SSM. `data/demo_*.json` is git-ignored.
+- `deploy/aws/README.md`, with a cost for each step:
+  - prerequisites (budget, OIDC provider, demo keys, SSM);
+  - the two-pass first deploy, including the manual first image push;
+  - Amplify steps (SPA rewrite rule, CSP placeholder, CORS origin update, WAF off);
+  - redeploy and rollback;
+  - demo-key and AES-key rotation;
+  - teardown.
+- CI `lint` job now runs `cfn-lint deploy/aws/*.yaml --regions ap-south-1`.
+- `tests/test_deploy_assets.py` (4):
+  - demo keys authenticate as their roles and only hashes are stored;
+  - the template caps: concurrency ≤ 2, 7-day logs, 2 images, no NAT/EC2/provisioned versions;
+  - no secret values in the function environment, OIDC trust scoped to a branch, CORS never `*`;
+  - the only `*` resource is `ecr:GetAuthorizationToken`, and there are no wildcard actions.
+
+cfn-lint 1.53.3 went into the project venv (the plan asks for cfn-lint in CI).
+
+### Needs you (AWS account work)
+Run README §0-§2 in order. Nothing has been created in AWS.

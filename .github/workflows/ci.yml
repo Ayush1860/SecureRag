@@ -25,11 +25,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install "ruff>=0.6" "mypy>=1.10" "types-PyYAML" pydantic pydantic-settings
+      - run: pip install "ruff>=0.6" "mypy>=1.10" "types-PyYAML" pydantic pydantic-settings "cfn-lint>=1.20,<2"
       - name: ruff
         run: ruff check securerag app scripts tests
       - name: mypy
         run: mypy securerag
+      - name: cfn-lint
+        run: cfn-lint deploy/aws/*.yaml --regions ap-south-1
 
   test:
     runs-on: ubuntu-latest
