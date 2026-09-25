@@ -90,7 +90,11 @@ The first call triggers a cold start of about 20 s. Look for `INIT_REPORT` in th
 
 1. Amplify → **Host web app** → GitHub → repo `Ayush1860/SecureRag`, branch `main`. Amplify reads
    `amplify.yml` from the repo root (app root `frontend`).
-2. Environment variables: `VITE_API_BASE=<FunctionUrl>` (no trailing slash).
+2. Environment variables:
+   - `AMPLIFY_MONOREPO_APP_ROOT=frontend` (required, because `amplify.yml` uses `appRoot: frontend`)
+   - `VITE_API_BASE=<FunctionUrl>` (no trailing slash)
+   - optional `VITE_DEMO_KEYS_JSON=<contents of data/demo_keys_plain.json>`, which shows one-click
+     demo credentials in the "About this demo" panel (see SECURITY.md, "Public demo credentials")
 3. **Rewrites and redirects → Manage → add the SPA rewrite:**
 
    | Source address | Target address | Type |

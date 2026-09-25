@@ -906,3 +906,42 @@ cfn-lint 1.53.3 went into the project venv (the plan asks for cfn-lint in CI).
 
 ### Needs you (AWS account work)
 Run README §0-§2 in order. Nothing has been created in AWS.
+
+## Prompt 4 — Amplify frontend
+
+### Added
+- `amplify.yml` at the repo root. Monorepo `appRoot: frontend`; `npm ci`, then `npm run build`,
+  then `dist/**` as the artifact, with `node_modules` cached. `customHeaders` for every path:
+  - CSP: `default-src 'self'`, `script-src 'self'`, and `connect-src 'self'
+    FUNCTION_URL_PLACEHOLDER` (you replace the placeholder, per the plan). Google Fonts are
+    allowed for styles/fonts; `frame-ancestors 'none'`, `base-uri`/`form-action` `'self'`,
+    `object-src 'none'`.
+  - `nosniff`, `Referrer-Policy`, `X-Frame-Options: DENY`, HSTS, `Permissions-Policy`.
+  Amplify needs `AMPLIFY_MONOREPO_APP_ROOT=frontend` for an `appRoot` build; the README says so.
+- `frontend/src/components/AboutDemo.jsx`, an "About this demo" panel covering:
+  - synthetic data only, with planted canaries;
+  - the cold-start note (~20 s);
+  - links to the source, the benchmark report and SECURITY.md.
+  It's open by default on the hosted build (`VITE_API_BASE` set) and collapsed locally. When
+  `VITE_DEMO_KEYS_JSON` is set it lists the demo roles with a **Use** button, which signs in with
+  that key through the normal credential flow; the server still derives the role. Keys are hidden
+  in dev auth mode.
+- `deploy/aws/README.md` §2 already had the SPA rewrite rule
+  (`</^[^.]+$|\.(?!(css|…)$)([^.]+$)/>` → `/index.html`, 200) and the CORS/CSP steps. The
+  environment-variable list is now complete.
+- `SECURITY.md`:
+  - "Public demo credentials": why showing the keys is acceptable (synthetic data, keys locked to
+    roles server-side, reserved concurrency 2, per-key rate limit, the Groq free tier with a
+    refusal fallback, no admin key published, rotation) and a rule to never do it for real data;
+  - "Frontend headers".
+
+### Verified
+- `vite build` passes with and without the hosted variables.
+- Served the hosted build locally (`vite preview`) in the in-app browser. The header shows
+  "Waking up the demo backend (~20 s)…" while `/api/ready` is unreachable, the About panel is
+  open with the three demo roles and Use buttons, and the credential panel shows because the
+  auth mode falls back to `api_key` when the backend can't be reached.
+- `amplify.yml` parses and the CSP folds to a single header line.
+
+### Needs you
+The Amplify console steps in deploy/aws/README.md §2, and the CSP placeholder replacement.

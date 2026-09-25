@@ -865,3 +865,33 @@ body {
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+/* About this demo */
+.about-toggle {
+  width: 100%;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+.about-body p {
+  margin: 6px 0;
+  line-height: 1.45;
+}
+.about-body a {
+  color: #22d3ee;
+}
+.demo-keys {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.demo-keys li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}

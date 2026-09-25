@@ -68,6 +68,33 @@ protects, against whom, how, and what it deliberately does **not** protect again
 - **CORS is answered by the Function URL,** so FastAPI's CORS middleware is not installed (a
   second `Access-Control-Allow-Origin` header would break browsers).
 
+### Public demo credentials
+
+The hosted page may show the three demo API keys (guest, employee, exec), baked in at build time
+through `VITE_DEMO_KEYS_JSON`. This is deliberate. The corpus is **synthetic**, and the demo's
+whole point is to let anyone watch RBAC hold: each key is still locked to one role on the server,
+and the page never chooses the role. What bounds abuse and cost:
+- **Lambda reserved concurrency 2:** at most two requests run at once, and the rest are throttled
+  (HTTP 429).
+- **Per-key rate limit** of 20/minute per container (`RATE_LIMIT`).
+- **The LLM's free tier:** Groq's limits cap generation. When they're hit, the router falls back
+  to a refusal, never to a paid provider.
+- **No admin role key** is published, and admin endpoints are disabled on Lambda anyway.
+- **Rotation:** rotating the keys (deploy/aws/README.md §4) invalidates published ones on the next
+  deploy.
+
+Never publish keys for a deployment that serves real documents.
+
+### Frontend headers (Amplify)
+
+`amplify.yml` sets:
+- a CSP whose `connect-src` allows only `'self'` and the Function URL, with `script-src 'self'`,
+  `frame-ancestors 'none'` and `object-src 'none'`;
+- `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `X-Frame-Options: DENY`, HSTS and a
+  restrictive `Permissions-Policy`.
+
+`style-src` allows `'unsafe-inline'` because React style attributes need it. Scripts do not.
+
 ## Known limitations (summary)
 
 - Embedding inversion (T5): the vectors aren't encrypted, so similarity search keeps working.

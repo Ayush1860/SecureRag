@@ -1,0 +1,44 @@
+# AWS Amplify Hosting build for the React frontend (monorepo: app root = frontend).
+# In the Amplify console set AMPLIFY_MONOREPO_APP_ROOT=frontend and VITE_API_BASE=<Function URL>
+# (optionally VITE_DEMO_KEYS_JSON). See deploy/aws/README.md.
+#
+# BEFORE THE FIRST DEPLOY: replace FUNCTION_URL_PLACEHOLDER in the CSP below with your Function URL
+# origin (e.g. https://abc123.lambda-url.ap-south-1.on.aws). Until then the browser blocks API calls.
+version: 1
+applications:
+  - appRoot: frontend
+    frontend:
+      phases:
+        preBuild:
+          commands:
+            - npm ci --no-audit --no-fund
+        build:
+          commands:
+            - npm run build
+      artifacts:
+        baseDirectory: dist
+        files:
+          - "**/*"
+      cache:
+        paths:
+          - node_modules/**/*
+    customHeaders:
+      - pattern: "**"
+        headers:
+          - key: Content-Security-Policy
+            # style-src needs 'unsafe-inline' for React style attributes; scripts stay 'self' only.
+            value: >-
+              default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+              font-src 'self' https://fonts.gstatic.com; img-src 'self' data:;
+              connect-src 'self' FUNCTION_URL_PLACEHOLDER;
+              frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'
+          - key: X-Content-Type-Options
+            value: nosniff
+          - key: Referrer-Policy
+            value: strict-origin-when-cross-origin
+          - key: X-Frame-Options
+            value: DENY
+          - key: Strict-Transport-Security
+            value: max-age=31536000; includeSubDomains
+          - key: Permissions-Policy
+            value: camera=(), microphone=(), geolocation=()

@@ -17,12 +17,20 @@ import AnswerPanel from './components/AnswerPanel';
 import SecurityInspector from './components/SecurityInspector';
 import AuditTrailModal from './components/AuditTrailModal';
 import CredentialPanel from './components/CredentialPanel';
+import AboutDemo from './components/AboutDemo';
 
 const CREDENTIAL_KEY = 'securerag.credential';
 // API origin: empty for local dev / docker-compose (same-origin /api), the Lambda Function URL on Amplify.
 const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '');
 const api = (path) => `${API_BASE}${path}`;
 const READY_POLL_MS = 4000;
+const HOSTED = API_BASE !== '';
+let DEMO_KEYS = {};
+try {
+  DEMO_KEYS = JSON.parse(import.meta.env.VITE_DEMO_KEYS_JSON || '{}');
+} catch {
+  DEMO_KEYS = {};
+}
 const READY_MAX_TRIES = 30; // ~2 minutes before giving up and showing "offline"
 
 function readCredential() {
@@ -271,6 +279,7 @@ export default function App() {
       <main className="main-content">
         {/* Left Column: Role Selector & Scenario Presets */}
         <aside className="sidebar-col">
+          <AboutDemo demoKeys={authMode !== 'dev' ? DEMO_KEYS : {}} onUseKey={signIn} hosted={HOSTED} />
           {authMode !== 'dev' && (
             <CredentialPanel
               authMode={authMode}
