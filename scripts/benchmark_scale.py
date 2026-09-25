@@ -49,24 +49,36 @@ ROLES = ["guest", "employee", "finance_lead", "exec"]
 # Pipeline adapters (the only code that knows pipeline APIs)
 # --------------------------------------------------------------------------------------
 
-def _ingest_corpus(data_dir: str, chroma_dir: str) -> dict[str, Any]:
+def _settings_for(args: argparse.Namespace) -> Any:
+    """Settings for one benchmark run: its own store, state DB and sparse dir under the work dir."""
     from securerag.config import get_settings
+
+    work = Path(args.work_dir)
+    return get_settings().model_copy(update={
+        "data_dir": args.data_dir, "chroma_dir": str(work / "chroma"),
+        "state_db_path": str(work / "ingest_state.sqlite"), "sparse_dir": str(work / "sparse"),
+        "vector_backend": args.backend, "qdrant_url": args.qdrant_url or "",
+        "qdrant_path": str(work / "qdrant"), "collection_name": args.collection,
+    })
+
+
+def _ingest_corpus(args: argparse.Namespace) -> dict[str, Any]:
     from securerag.retrieval.store import open_vector_store, run_ingestion
     from securerag.security.encryption import VectorStoreEncryptor
 
-    settings = get_settings().model_copy(update={"data_dir": data_dir, "chroma_dir": chroma_dir})
-    report = run_ingestion(settings, VectorStoreEncryptor(), full_rebuild=True)
-    return {"chunks": open_vector_store(settings).count(), "report": report.as_dict()}
+    settings = _settings_for(args)
+    store = open_vector_store(settings)  # one client: Qdrant local mode allows a single one per path
+    report = run_ingestion(settings, VectorStoreEncryptor(), full_rebuild=True, store=store)
+    return {"chunks": store.count(), "report": report.as_dict()}
 
 
-def _open_engine(data_dir: str, chroma_dir: str, audit_path: str):
+def _open_engine(args: argparse.Namespace, audit_path: str):
     """Returns (engine, timings) where timings splits startup into model load and store open."""
-    from securerag.config import get_settings
     from securerag.retrieval.embedder import get_encoder
     from securerag.retrieval.store import build_engine, open_serving_stack
     from securerag.security.encryption import VectorStoreEncryptor
 
-    settings = get_settings().model_copy(update={"data_dir": data_dir, "chroma_dir": chroma_dir})
+    settings = _settings_for(args)
     t0 = time.perf_counter()
     encoder = get_encoder(settings.embed_model, settings.embed_device)
     t1 = time.perf_counter()
@@ -83,7 +95,7 @@ def _open_engine(data_dir: str, chroma_dir: str, audit_path: str):
 
 def _worker_ingest(args: argparse.Namespace) -> dict[str, Any]:
     t0 = time.perf_counter()
-    info = _ingest_corpus(args.data_dir, args.chroma_dir)
+    info = _ingest_corpus(args)
     elapsed = time.perf_counter() - t0
     return {"ingest_s": elapsed, **info}
 
@@ -96,7 +108,7 @@ def _worker_serve(args: argparse.Namespace) -> dict[str, Any]:
     queries: list[dict[str, str]] = json.loads(Path(args.queries_file).read_text(encoding="utf-8"))
 
     t0 = time.perf_counter()
-    engine, startup_parts = _open_engine(args.data_dir, args.chroma_dir, args.audit_path)
+    engine, startup_parts = _open_engine(args, args.audit_path)
     startup_s = time.perf_counter() - t0
 
     # Time the retriever separately by wrapping the instance method.
@@ -370,6 +382,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Generated: {report['generated_at']}",
         f"- Git commit: `{report['git_commit']}`",
         f"- Hardware: {_fmt_hw(report.get('hardware', {}))}",
+        f"- Vector backend: `{report.get('backend', 'chroma')}`",
         f"- Corpus: `{report['data_dir']}` ({report['corpus']['docs']} docs, "
         f"{report['corpus']['words']:,} words, {report['corpus']['canaries']} canaries)",
         "",
@@ -431,6 +444,18 @@ def render_markdown(report: dict[str, Any]) -> str:
         lines += ["", "## Role-spoofing attempts (AUTH_MODE=api_key)", "",
                   f"{spoof['attempts']} attempts, **{spoof['escalations']} escalations**, "
                   f"block rate {spoof['block_rate']:.2%}."]
+    ref = report.get("compare")
+    if ref and ref.get("serve") and ref["serve"].get("per_role"):
+        lines += ["", f"## Comparison with `{ref['label']}` ({ref.get('backend') or 'chroma'}, "
+                  f"{_fmt_hw(ref.get('hardware', {}))})", "",
+                  "Retrieval p95 per role (ms). Hardware differs, so compare shapes (how roles scale), not "
+                  "absolute values.", "",
+                  "| Role | This run | Reference | Ratio |", "|---|---|---|---|"]
+        for role, s in srv["per_role"].items():
+            mine = s["retrieval_ms"]["p95"]
+            other = ref["serve"]["per_role"].get(role, {}).get("retrieval_ms", {}).get("p95")
+            ratio = f"{mine / other:.2f}x" if other else "-"
+            lines.append(f"| {role} | {mine} | {other if other is not None else '-'} | {ratio} |")
     return "\n".join(lines) + "\n"
 
 
@@ -443,6 +468,8 @@ def _fmt_hw(hw: dict[str, Any]) -> str:
 
 
 def _git_commit() -> str:
+    if os.getenv("GIT_COMMIT"):  # inside the Docker image there is no .git
+        return os.environ["GIT_COMMIT"][:12]
     try:
         return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, text=True).strip()
     except Exception:  # noqa: BLE001
@@ -450,17 +477,20 @@ def _git_commit() -> str:
 
 
 def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
-    data_dir = Path(args.data_dir) if args.data_dir else ROOT / "data" / "synthetic" / f"docs_{args.docs}"
+    data_root = Path(args.data_root)
+    data_dir = Path(args.data_dir) if args.data_dir else data_root / "synthetic" / f"docs_{args.docs}"
     if not args.data_dir:
         _ensure_corpus(args.docs, data_dir, args.seed)
     label = args.label or data_dir.name
     manifest = json.loads((data_dir / "manifest.json").read_text(encoding="utf-8"))
 
-    work = ROOT / "data" / "bench" / label
+    work = data_root / "bench" / label
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True, exist_ok=True)
-    chroma_dir, audit_path = work / "chroma", work / "audit.jsonl"
+    audit_path = work / "audit.jsonl"
     result_file, queries_file = work / "worker_result.json", work / "queries.json"
+    # A fresh collection per run (dropped at the end) so runs never share state on a Qdrant server.
+    collection = f"bench_{re.sub(r'[^A-Za-z0-9_]', '_', label)}_{os.urandom(3).hex()}"
 
     env = dict(os.environ)
     env.update({
@@ -469,8 +499,10 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
         "PYTHONIOENCODING": "utf-8",
     })
     base_cmd = [sys.executable, str(Path(__file__).resolve()), "--data-dir", str(data_dir),
-                "--chroma-dir", str(chroma_dir), "--audit-path", str(audit_path),
-                "--result-file", str(result_file)]
+                "--work-dir", str(work), "--audit-path", str(audit_path),
+                "--result-file", str(result_file), "--backend", args.backend, "--collection", collection]
+    if args.qdrant_url:
+        base_cmd += ["--qdrant-url", args.qdrant_url]
 
     logger.info("[%s] ingest", label)
     ingest_run = _run_monitored(base_cmd + ["--worker", "ingest"], env, args.timeout)
@@ -499,8 +531,14 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
         else:
             serve["error"] = serve_run["output_tail"]
 
+    store_mb: float | None = _dir_size_mb(work / ("chroma" if args.backend == "chroma" else "qdrant"))
+    if args.backend == "qdrant":
+        store_mb = None if args.qdrant_url else store_mb
+        _drop_collection(args, work, collection)
+
     report = {
         "label": label,
+        "backend": args.backend,
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "git_commit": _git_commit(),
         "hardware": _hardware(),
@@ -509,11 +547,14 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
                    "canaries": sum(1 for r in manifest["records"] if r["canary"]),
                    "injected": sum(1 for r in manifest["records"] if r["injected"])},
         "queries_per_role": args.queries_per_role,
-        "store_size_mb": _dir_size_mb(chroma_dir),
+        "store_size_mb": store_mb,
         "ingest": ingest,
         "serve": serve,
     }
-    out = ROOT / args.out
+    if getattr(args, "compare", None) and Path(args.compare).exists():
+        ref = json.loads(Path(args.compare).read_text(encoding="utf-8"))
+        report["compare"] = {k: ref.get(k) for k in ("label", "backend", "hardware", "serve")}
+    out = ROOT / args.out  # an absolute --out stays absolute
     out.mkdir(parents=True, exist_ok=True)
     (out / f"{label}.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     (out / f"{label}.md").write_text(render_markdown(report), encoding="utf-8")
@@ -521,6 +562,58 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
     if not args.keep_work:
         shutil.rmtree(work, ignore_errors=True)
     return report
+
+
+def _drop_collection(args: argparse.Namespace, work: Path, collection: str) -> None:
+    """Remove this run's Qdrant collection (and its meta collection) so nothing lingers on the server."""
+    try:
+        from securerag.retrieval.qdrant_store import QdrantVectorStore
+
+        store = (QdrantVectorStore(url=args.qdrant_url, collection_name=collection) if args.qdrant_url
+                 else QdrantVectorStore(path=str(work / "qdrant"), collection_name=collection))
+        store.reset()
+        logger.info("dropped Qdrant collection %s", collection)
+    except Exception:  # noqa: BLE001 - cleanup must not fail the report
+        logger.exception("could not drop Qdrant collection %s", collection)
+
+
+PROBE_DOCS = 300
+PROJECTION_SIZES = (1000, 10000, 50000)
+
+
+def probe(args: argparse.Namespace) -> dict[str, Any]:
+    """Benchmark a 300-doc corpus and project the wall time of larger runs on this machine.
+
+    Projection = fixed process overhead (imports, model load, startup, twice) + chunks / measured
+    chunks-per-second + 800 queries x measured mean latency + the post-run injection scan, which
+    decrypts every chunk (~10% of ingest in the local runs). Chunks per doc come from the probe corpus.
+    """
+    probe_args = argparse.Namespace(**{**vars(args), "docs": PROBE_DOCS, "data_dir": None,
+                                       "label": f"{args.label or 'run'}_probe", "queries_per_role": 10,
+                                       "out": str(Path(args.data_root) / "bench" / "probe_reports"),
+                                       "keep_work": False, "compare": None})
+    rep = run_benchmark(probe_args)
+    ing, srv = rep["ingest"], rep.get("serve") or {}
+    if not ing.get("ok") or not srv.get("ok"):
+        raise SystemExit("probe run failed; see the probe report under data/bench/probe_reports")
+    chunks_per_doc = ing["chunks"] / PROBE_DOCS
+    cps = ing["chunks_per_s"]
+    overhead = (ing["process_wall_s"] - ing["ingest_s"]) + srv.get("startup_s", 0)
+    mean_query_s = srv["latency_ms"]["mean"] / 1000
+    sizes = sorted(set(PROJECTION_SIZES) | {args.docs})
+    hours = {}
+    for docs in sizes:
+        chunks = docs * chunks_per_doc
+        ingest_s = chunks / cps
+        total = 2 * overhead + ingest_s * 1.1 + 4 * 200 * mean_query_s
+        hours[str(docs)] = round(total / 3600, 2)
+    result = {"chunks_per_s": cps, "chunks_per_doc": round(chunks_per_doc, 2), "overhead_s": round(overhead, 1),
+              "mean_query_ms": srv["latency_ms"]["mean"], "projected_hours": hours}
+    print(json.dumps({"probe": result}, indent=2))
+    for docs in sizes:
+        flag = "  <-- over --max-hours" if hours[str(docs)] > args.max_hours else ""
+        print(f"projected {docs:>6} docs: {hours[str(docs)]:5.2f} h{flag}")
+    return result
 
 
 def main() -> int:
@@ -534,9 +627,18 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=3600.0, help="per-stage timeout in seconds")
     parser.add_argument("--keep-work", action="store_true", help="keep data/bench/<label> (store, audit log)")
     parser.add_argument("--fail-on-leak", action="store_true", help="exit 1 if any canary leaks")
+    parser.add_argument("--backend", choices=["chroma", "qdrant"], default="chroma")
+    parser.add_argument("--qdrant-url", default="", help="Qdrant server (default: local mode under the work dir)")
+    parser.add_argument("--data-root", default=str(ROOT / "data"), help="where corpora and work dirs live")
+    parser.add_argument("--compare", help="reference report JSON to compare retrieval p95 against")
+    parser.add_argument("--probe", action="store_true",
+                        help="first ingest a 300-doc corpus, project wall time, refuse runs over --max-hours")
+    parser.add_argument("--probe-only", action="store_true", help="print the projection and exit")
+    parser.add_argument("--max-hours", type=float, default=4.5)
     # internal worker arguments
     parser.add_argument("--worker", choices=["ingest", "serve"], help=argparse.SUPPRESS)
-    parser.add_argument("--chroma-dir", help=argparse.SUPPRESS)
+    parser.add_argument("--work-dir", help=argparse.SUPPRESS)
+    parser.add_argument("--collection", default="securerag_chunks", help=argparse.SUPPRESS)
     parser.add_argument("--audit-path", help=argparse.SUPPRESS)
     parser.add_argument("--result-file", help=argparse.SUPPRESS)
     parser.add_argument("--queries-file", help=argparse.SUPPRESS)
@@ -547,6 +649,16 @@ def main() -> int:
         result = _worker_ingest(args) if args.worker == "ingest" else _worker_serve(args)
         Path(args.result_file).write_text(json.dumps(result), encoding="utf-8")
         return 0
+
+    if args.probe or args.probe_only:
+        projection = probe(args)
+        target = projection["projected_hours"].get(str(args.docs))
+        if args.probe_only:
+            return 0
+        if target is not None and target > args.max_hours:
+            logger.error("projected %.2f h for %d docs exceeds --max-hours %.1f; refusing to run",
+                         target, args.docs, args.max_hours)
+            return 3
 
     report = run_benchmark(args)
     leaks = (report.get("serve") or {}).get("canary_leaks", 0)

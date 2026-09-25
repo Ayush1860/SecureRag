@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     qdrant_path: str = "./data/qdrant"
     qdrant_api_key: str = ""
     chroma_prefilter: Literal["overfetch", "strict"] = "overfetch"
+    collection_name: str = "securerag_chunks"
 
     # Retrieval
     top_k: int = Field(default=5, ge=1, le=50)

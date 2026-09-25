@@ -42,9 +42,10 @@ def open_vector_store(settings: Settings) -> VectorStore:
 
         if settings.qdrant_url:
             return QdrantVectorStore(url=settings.qdrant_url, api_key=settings.qdrant_api_key or None,
-                                     collection_name=COLLECTION_NAME)
-        return QdrantVectorStore(path=settings.qdrant_path, collection_name=COLLECTION_NAME)
-    return ChromaVectorStore(settings.chroma_dir, prefilter=settings.chroma_prefilter)
+                                     collection_name=settings.collection_name)
+        return QdrantVectorStore(path=settings.qdrant_path, collection_name=settings.collection_name)
+    return ChromaVectorStore(settings.chroma_dir, collection_name=settings.collection_name,
+                             prefilter=settings.chroma_prefilter)
 
 
 def run_ingestion(

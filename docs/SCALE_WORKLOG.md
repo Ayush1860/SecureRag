@@ -678,3 +678,75 @@ per role (ms): exec / employee / finance_lead / guest.
 `pytest -q`: 163 passed. ruff and mypy clean.
 
 **Commit:** `feat(eval): BEIR under RBAC, 1k/10k/50k security+scale runs, adaptive dense pre-filter`
+
+---
+
+# AWS plan (`AWS_PLAN.md`)
+
+Scope: validate the Docker image and the Qdrant server backend (on GitHub Actions, $0), make the
+backend Lambda-ready, write the CloudFormation stack and deploy workflow, and prepare the Amplify
+frontend. Rules followed throughout:
+- **I create no AWS resources.** I only write templates, workflows and scripts for you to run.
+- Tests never touch real AWS.
+- Nothing is pushed unless you ask.
+
+Where the plan asks for your choice, I made the call myself, as you instructed earlier, and
+recorded the reasoning below so it's easy to flip.
+
+## Prompt 1 — Docker + Qdrant benchmark on GitHub Actions
+
+### Added / changed
+- `scripts/benchmark_scale.py`:
+  - `--backend chroma|qdrant` and `--qdrant-url`. Without a URL, Qdrant runs in local
+    (embedded) mode under the work dir, which is enough for a smoke test.
+  - Each run gets its own collection (`bench_<label>_<rand>`) and drops it afterwards
+    (`_drop_collection`).
+  - The report records the backend alongside the runner's CPU/RAM.
+  - `--probe` ingests and benchmarks a 300-doc corpus, prints projected wall time for
+    1k/10k/50k and the requested size, and refuses the run (exit 3) if it's over `--max-hours`
+    (default 4.5). `--probe-only` prints the projection and stops.
+  - `--compare <report.json>` adds a per-role retrieval p95 comparison table.
+  - `--data-root` lets the benchmark write under the container's `/data` volume.
+  - `GIT_COMMIT` is read from the environment when there is no `.git` (inside the image).
+  - The workers take a `--work-dir` and build their settings (store, state DB, sparse dir,
+    backend, collection) in one place.
+- Settings: `COLLECTION_NAME` (`collection_name`), now honoured by both backends.
+- `scripts/smoke_api.py`: end-to-end RBAC smoke test against any running API, using only the
+  standard library plus `securerag.security.rbac`, so it runs on a bare runner or against Lambda
+  later. For each role's key it checks:
+  - `/api/auth/me` reports the key's own role;
+  - every returned excerpt passes `authorize(role, …)`;
+  - `X-Dev-Role: exec` doesn't change the role;
+  - a body `role` gets 422;
+  - a request with no key gets 401.
+  Exit codes: 0 ok, 1 violation, 2 never ready.
+- `tests/test_smoke_api.py` (3): the smoke script really reports leaks, escalations and an
+  accepted body role.
+- `.github/workflows/docker-bench.yml` (`workflow_dispatch`: `docs` default 10000, `backend` default
+  qdrant, `max_hours` 4.5). Steps:
+  1. Free disk (dotnet, android, ghc, CodeQL, boost, swift), with `df -h` after each heavy step.
+  2. Write `.env` with a throwaway, masked AES key and `ENV=prod AUTH_MODE=api_key`.
+  3. `docker compose build`.
+  4. Start Qdrant and wait on `/readyz`.
+  5. Smoke test: `compose run ingest`, one API key per role (masked), `compose up api`, then
+     `smoke_api.py`.
+  6. Run the probe and the benchmark *inside the API image* against `http://qdrant:6333`, with
+     `--fail-on-leak` and `--compare` against the local `phase6_docs_<n>.json` when it exists.
+  7. Upload `out/` as an artifact (no commits from CI), then `compose down -v`.
+  The job timeout is 350 min.
+
+### Local verification (no Docker here)
+- Qdrant embedded mode at 300 docs: 0 canary leaks, 0/25 escalations, and the collection is
+  dropped afterwards. Retrieval is slow in embedded mode (brute-force Python), so these numbers
+  mean nothing for performance; the server run is what counts. On this machine the probe
+  projects 1k 0.04 h, 10k 0.25 h and 50k 1.18 h (GitHub's CPU-only runner will be several times
+  slower).
+- `smoke_api.py` against a local uvicorn in `api_key` mode, one key per role (5 roles × 5 queries):
+  no problems.
+- `pytest` 166 passed; ruff and mypy clean.
+
+### Still pending (needs you)
+Run **Actions → Docker + Qdrant benchmark** with `docs=10000`, then `docs=50000` if the 10k probe
+projects it under 4.5 h. Download the `gha_qdrant_docs_*` artifacts into `reports/scale/` and
+commit them. Until that job passes, the Phase 5 note that the Dockerfile and compose are
+"not built locally" still applies.

@@ -1,0 +1,126 @@
+name: Docker + Qdrant benchmark
+
+# Manual only. Validates the Dockerfile and docker-compose.yml (never run on the dev machine),
+# runs an RBAC smoke test against the real container, then the scale benchmark inside the API
+# image against a Qdrant server. Reports are uploaded as artifacts; CI never commits.
+on:
+  workflow_dispatch:
+    inputs:
+      docs:
+        description: "Synthetic corpus size"
+        default: "10000"
+      backend:
+        description: "Vector backend"
+        type: choice
+        options: [qdrant, chroma]
+        default: qdrant
+      max_hours:
+        description: "Refuse runs the probe projects above this many hours"
+        default: "4.5"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350  # hard stop below the 6-hour job limit
+    env:
+      DOCS: ${{ inputs.docs }}
+      BACKEND: ${{ inputs.backend }}
+      LABEL: gha_${{ inputs.backend }}_docs_${{ inputs.docs }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/share/swift || true
+          docker system prune -af >/dev/null || true
+          df -h /
+
+      - name: Write .env with throwaway secrets
+        run: |
+          KEY=$(python3 -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())")
+          echo "::add-mask::$KEY"
+          cat > .env <<EOF
+          ENV=prod
+          AUTH_MODE=api_key
+          SECURERAG_AES_KEY_B64=$KEY
+          LLM_PROVIDER=mock
+          LOG_LEVEL=WARNING
+          EOF
+
+      - name: Build image (docker compose build)
+        run: |
+          docker compose build api
+          docker image ls securerag
+          df -h /
+
+      - name: Start Qdrant and wait for it
+        run: |
+          docker compose up -d qdrant
+          for i in $(seq 1 60); do
+            if docker compose run --rm --no-deps -T api python -c \
+                "import urllib.request; urllib.request.urlopen('http://qdrant:6333/readyz', timeout=5)" 2>/dev/null; then
+              echo "qdrant ready"; exit 0
+            fi
+            sleep 3
+          done
+          docker compose logs qdrant; exit 1
+
+      - name: Smoke test (ingest sample, one key per role, RBAC checks)
+        run: |
+          docker compose run --rm -T ingest
+          echo "{}" > keys.json
+          for role in guest employee finance_lead exec admin; do
+            key=$(docker compose run --rm --no-deps -T api python scripts/create_api_key.py \
+                    --principal "ci-$role" --role "$role" | sed -n 's/.*(shown once): //p')
+            echo "::add-mask::$key"
+            python3 - "$role" "$key" <<'PY'
+          import json, sys
+          keys = json.load(open("keys.json")); keys[sys.argv[1]] = sys.argv[2]
+          json.dump(keys, open("keys.json", "w"))
+          PY
+          done
+          docker compose up -d api
+          python3 scripts/smoke_api.py --base-url http://localhost:8000 --keys-file keys.json --wait-ready 300
+          df -h /
+
+      - name: Smoke test logs (on failure)
+        if: failure()
+        run: docker compose logs --tail 200 api qdrant
+
+      - name: Probe + benchmark inside the API image
+        run: |
+          docker compose stop api
+          mkdir -p out && chmod 777 out
+          QDRANT_ARGS=""
+          if [ "$BACKEND" = "qdrant" ]; then QDRANT_ARGS="--qdrant-url http://qdrant:6333"; fi
+          COMPARE_ARGS=""
+          if [ -f "reports/scale/phase6_docs_${DOCS}.json" ]; then
+            COMPARE_ARGS="--compare /ref/phase6_docs_${DOCS}.json"
+          fi
+          docker compose run --rm --no-deps -T \
+            -e GIT_COMMIT=${{ github.sha }} \
+            -v "$PWD/out:/out" -v "$PWD/reports/scale:/ref:ro" \
+            api python scripts/benchmark_scale.py \
+              --backend "$BACKEND" $QDRANT_ARGS \
+              --docs "$DOCS" --label "$LABEL" \
+              --data-root /data/bench_root --out /out \
+              --probe --max-hours ${{ inputs.max_hours }} \
+              --timeout 18000 --fail-on-leak $COMPARE_ARGS
+          df -h /
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.LABEL }}
+          path: out/
+          if-no-files-found: warn
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v --remove-orphans
