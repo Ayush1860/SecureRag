@@ -159,6 +159,11 @@ class IngestState:
                 return
             yield from rows
 
+    def partition_counts(self) -> dict[str, int]:
+        rows = self._conn.execute(
+            "SELECT partition, COUNT(*) FROM chunks WHERE partition IS NOT NULL GROUP BY partition")
+        return {p: n for p, n in rows}
+
     def partitions(self) -> set[str]:
         return {r[0] for r in self._conn.execute("SELECT DISTINCT partition FROM chunks WHERE partition IS NOT NULL")}
 

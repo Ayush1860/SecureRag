@@ -102,6 +102,12 @@ def test_relabelled_chunk_fails_authentication_instead_of_leaking(tmp_path):
     # An attacker with write access to the vector DB relabels the confidential memo as public.
     store.update_payloads([cid], [ct], [{**meta, "department": "general", "clearance": "public"}])
     stack.sparse._cache.clear()
+    # Over-fetch path: the partition-prefixed chunk ID still says finance/confidential, so the
+    # tampered row is dropped before any decryption and nothing leaks.
+    res = engine.query("Q3 gross margin cash runway", "guest", 5)
+    assert "34.2" not in res["answer"] and all("34.2" not in e["text"] for e in res["context_excerpts"])
+    # Strict path trusts the (tampered) metadata filter; AES-GCM AAD then refuses to decrypt.
+    store.prefilter = "strict"
     with pytest.raises(DecryptionError):
         engine.query("Q3 gross margin cash runway", "guest", 5)
 

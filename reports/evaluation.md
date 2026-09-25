@@ -1,118 +1,94 @@
-# SecureRAG — Benchmark Evaluation Report
+# SecureRAG — Evaluation Report
 
-**Generated**: 2026-09-02T18:20:51.949535+00:00  
-**Environment**: Python 3.11.4 on Windows-10-10.0.26200-SP0  
-**LLM Provider**: `mock` (Deterministic offline mode)  
-**Embedding Model**: `all-MiniLM-L6-v2` (384-dimensional dense vectors)  
-**Vector Store**: ChromaDB with AES-256-GCM encrypted document payloads  
+Generated 2026-09-25 06:37 from `reports/beir/*.json` and `reports/scale/phase6_docs_*.json`. Reproduce with the commands at the end.
 
----
+> The earlier version of this report headlined *100% recall* measured on 5 hand-written documents.
+> That fixture is still in the unit tests (`tests/test_evaluation.py`); it is not a benchmark.
 
-## Executive Summary
+Hardware: 8 CPUs, 15.8 GB RAM, NVIDIA GeForce GTX 1650 (embeddings on GPU), Windows-10-10.0.26200-SP0. LLM: deterministic mock (latency excludes generation).
 
-This evaluation report documents the empirical benchmark results for SecureRAG across three core architectural pillars:
-1. **Retrieval Quality**: Evaluation of dense vector + sparse BM25 hybrid search with Reciprocal Rank Fusion (RRF).
-2. **Security Hardening**: Rigorous validation of dual-stage RBAC authorization boundaries, cross-boundary leakage prevention, and heuristic prompt-injection sanitization.
-3. **Pipeline Performance**: Isolated sub-millisecond stage latencies (embedding, retrieval, generation) and full LangGraph end-to-end execution.
+## 1. Retrieval quality under RBAC (BEIR)
 
-| Category | Key Metric | Measured Result | Target / Threshold | Status |
-| :--- | :--- | :--- | :--- | :--- |
-| **Retrieval** | Recall@1 | **100.00%** | ≥ 80.00% | PASS |
-| **Retrieval** | Recall@3 | **100.00%** | ≥ 90.00% | PASS |
-| **Retrieval** | Recall@5 | **100.00%** | ≥ 95.00% | PASS |
-| **Retrieval** | Precision@1 | **100.00%** | ≥ 80.00% | PASS |
-| **Retrieval** | Precision@3 | **33.33%** | Baseline | PASS |
-| **Retrieval** | Precision@5 | **20.00%** | Baseline | PASS |
-| **Retrieval** | Mean Reciprocal Rank (MRR) | **1.0000** | ≥ 0.8500 | PASS |
-| **Security** | Unauthorized Retrieval Rate | **0.00%** | **0.00%** (Strict Invariant) | PASS |
-| **Security** | Prompt-Injection Detection Rate | **100.00%** | ≥ 90.00% | PASS |
-| **Security** | False-Positive Rate (FPR) | **0.00%** | ≤ 10.00% | PASS |
-| **Performance** | Median E2E Latency (P50) | **15.66 ms** | < 100 ms (Offline) | PASS |
-| **Performance** | P95 E2E Latency | **19.79 ms** | < 250 ms (Offline) | PASS |
+Documents get deterministic synthetic (department, clearance) labels and go through the real
+pipeline (chunking, AES-GCM, partitioned HMAC BM25). Per role, a query is scored only against
+the relevant documents that role may see. `exec` sees the whole corpus, so its row is
+comparable to published BEIR numbers.
 
----
+### fiqa — 57,638 docs, 74,748 chunks, 648 test queries
 
-## 1. Retrieval Performance
+| Role (evaluable queries) | Mode | nDCG@10 | Recall@10 | Recall@50 | MRR@10 | Leaks |
+|---|---|---|---|---|---|---|
+| guest (109) | dense | 0.516 | 0.642 | 0.914 | 0.485 | 0 |
+| guest (109) | sparse | 0.387 | 0.514 | 0.693 | 0.352 | 0 |
+| guest (109) | hybrid | 0.512 | 0.693 | 0.879 | 0.470 | 0 |
+| guest (109) | hybrid_rerank | 0.520 | 0.661 | 0.879 | 0.483 | 0 |
+| employee (404) | dense | 0.414 | 0.522 | 0.722 | 0.430 | 0 |
+| employee (404) | sparse | 0.253 | 0.328 | 0.508 | 0.266 | 0 |
+| employee (404) | hybrid | 0.388 | 0.500 | 0.704 | 0.408 | 0 |
+| employee (404) | hybrid_rerank | 0.417 | 0.512 | 0.704 | 0.433 | 0 |
+| finance_lead (423) | dense | 0.420 | 0.521 | 0.693 | 0.437 | 0 |
+| finance_lead (423) | sparse | 0.243 | 0.313 | 0.474 | 0.261 | 0 |
+| finance_lead (423) | hybrid | 0.362 | 0.474 | 0.680 | 0.377 | 0 |
+| finance_lead (423) | hybrid_rerank | 0.409 | 0.504 | 0.680 | 0.422 | 0 |
+| exec (648) | dense | 0.375 | 0.447 | 0.627 | 0.447 | 0 |
+| exec (648) | sparse | 0.223 | 0.285 | 0.419 | 0.274 | 0 |
+| exec (648) | hybrid | 0.342 | 0.417 | 0.613 | 0.418 | 0 |
+| exec (648) | hybrid_rerank | 0.376 | 0.443 | 0.613 | 0.449 | 0 |
 
-Retrieval was benchmarked over deterministic queries across multiple departments (`general`, `engineering`, `hr`, `finance`) and clearance levels (`public`, `internal`, `confidential`).
+### scifact — 5,183 docs, 9,982 chunks, 300 test queries
 
-### Metric Summary
+| Role (evaluable queries) | Mode | nDCG@10 | Recall@10 | Recall@50 | MRR@10 | Leaks |
+|---|---|---|---|---|---|---|
+| guest (22) | dense | 0.865 | 0.955 | 1.000 | 0.833 | 0 |
+| guest (22) | sparse | 0.841 | 0.955 | 1.000 | 0.804 | 0 |
+| guest (22) | hybrid | 0.881 | 0.955 | 1.000 | 0.856 | 0 |
+| guest (22) | hybrid_rerank | 0.870 | 0.955 | 1.000 | 0.842 | 0 |
+| employee (123) | dense | 0.793 | 0.911 | 0.951 | 0.753 | 0 |
+| employee (123) | sparse | 0.758 | 0.846 | 0.943 | 0.731 | 0 |
+| employee (123) | hybrid | 0.792 | 0.911 | 0.984 | 0.756 | 0 |
+| employee (123) | hybrid_rerank | 0.805 | 0.919 | 0.984 | 0.770 | 0 |
+| finance_lead (124) | dense | 0.779 | 0.914 | 0.944 | 0.741 | 0 |
+| finance_lead (124) | sparse | 0.681 | 0.805 | 0.872 | 0.645 | 0 |
+| finance_lead (124) | hybrid | 0.769 | 0.918 | 0.949 | 0.731 | 0 |
+| finance_lead (124) | hybrid_rerank | 0.795 | 0.917 | 0.949 | 0.758 | 0 |
+| exec (300) | dense | 0.657 | 0.811 | 0.890 | 0.612 | 0 |
+| exec (300) | sparse | 0.620 | 0.751 | 0.846 | 0.583 | 0 |
+| exec (300) | hybrid | 0.682 | 0.814 | 0.920 | 0.645 | 0 |
+| exec (300) | hybrid_rerank | 0.699 | 0.841 | 0.920 | 0.662 | 0 |
 
-| Metric | Value | Description |
-| :--- | :--- | :--- |
-| **Total Benchmark Queries** | `13` | Comprehensive multi-role test cases |
-| **Recall@1** | `100.00%` | Ground-truth source present at top position |
-| **Recall@3** | `100.00%` | Ground-truth source present within top-3 candidates |
-| **Recall@5** | `100.00%` | Ground-truth source present within top-5 candidates |
-| **Precision@1** | `100.00%` | Relevant items retrieved / 1 |
-| **Precision@3** | `33.33%` | Relevant items retrieved / 3 |
-| **Precision@5** | `20.00%` | Relevant items retrieved / 5 |
-| **MRR (Mean Reciprocal Rank)** | `1.0000` | Harmonic mean of first relevant document ranks |
+## 2. Security at scale (synthetic corpus with canaries)
 
----
+Each run sends 200 queries per role (topical, canary probes, injection-style probes).
+A leak is a canary from a document the role may not read showing up in its answer or context.
 
-## 2. Security Hardening & Threat Resistance
+| Docs | Chunks | Queries | Canary leaks | Injection detection (TP/FN) | Injection FPR | Role-spoof attempts | Escalations |
+|---|---|---|---|---|---|---|---|
+| 1,000 | 3,101 | 800 | **0** | 58.3% (14/10) | 0.0000% | 25 | **0** |
+| 10,000 | 31,429 | 800 | **0** | 55.7% (108/86) | 0.0000% | 25 | **0** |
+| 50,000 | 155,860 | 800 | **0** | 56.8% (571/434) | 0.0000% | 25 | **0** |
 
-### Dual-Stage RBAC & Unauthorized Retrieval Leak Rate
+Injection detection is for the regex heuristics alone. Half of the planted payloads are
+deliberately paraphrased to avoid those patterns, so this is a realistic lower bound;
+`INJECTION_CLASSIFIER` adds an ML detector at ingest. Flagged chunks are wrapped as untrusted
+data, and unflagged ones still sit inside the data-only context preamble.
 
-SecureRAG enforces access control twice: first as pre-filtering within the vector/lexical search query, and second post-retrieval before AES-256 decryption.
+## 3. Performance
 
-| Sub-Test | Checks / Queries | Unauthorized Leaks | Measured Leak Rate | Invariant Status |
-| :--- | :--- | :--- | :--- | :--- |
-| **RBAC Policy Matrix** | `40` | `0` | `0.00%` | PASS (Zero Leak) |
-| **Cross-Boundary Queries** | `6` | `0` | `0.00%` | PASS (Zero Leak) |
-| **Combined Unauthorized Retrieval Rate** | `46` | `0` | **0.00%** | **VERIFIED 0.00%** |
+![scale plots](scale/phase6_scale.png)
 
-### Prompt-Injection Defense & Sanitizer Performance
+| Docs | Chunks | Ingest (s) | Chunks/s | Ingest peak RSS (MB) | Store on disk (MB) | Startup: store open + key check (s) | Startup: model load (s) | Query p50 / p95 / p99 (ms) | Retrieval p95 (ms) |
+|---|---|---|---|---|---|---|---|---|---|
+| 1,000 | 3,101 | 36.92 | 84.0 | 1074 | 53 | 1.14 | 9.37 | 31.7 / 34.53 / 39.46 | 21.06 |
+| 10,000 | 31,429 | 263.03 | 119.5 | 1165 | 481 | 1.36 | 9.29 | 38.87 / 59.01 / 61.09 | 45.85 |
+| 50,000 | 155,860 | 1370.93 | 113.7 | 1412 | 2394 | 2.04 | 9.40 | 61.24 / 164.65 / 170.88 | 150.79 |
 
-Retrieved documents and incoming inputs are scanned for prompt-injection markers and instruction override attacks.
+## Reproduce
 
-| Metric | Value | Meaning |
-| :--- | :--- | :--- |
-| **Total Benchmark Samples** | `40` | Balanced benign technical vs. adversarial attack samples |
-| **True Positives (TP)** | `20` | Adversarial injection vectors correctly flagged |
-| **False Negatives (FN)** | `0` | Adversarial vectors that escaped detection |
-| **False Positives (FP)** | `0` | Benign technical texts erroneously flagged |
-| **True Negatives (TN)** | `20` | Benign operational texts correctly passed |
-| **Injection Detection Rate (Recall / TPR)** | **100.00%** | TP / (TP + FN) |
-| **False-Positive Rate (FPR)** | **0.00%** | FP / (FP + TN) |
-| **Precision** | `100.00%` | TP / (TP + FP) |
-| **F1 Score** | `1.0000` | Harmonic mean of precision and recall |
-| **Overall Accuracy** | `100.00%` | (TP + TN) / Total |
-
----
-
-## 3. Pipeline Latency Telemetry
-
-Latency benchmarks were executed over `15` iterations per stage after warm-up.
-
-| Pipeline Stage | P50 (Median) | P95 | P99 | Mean | Min | Max | Unit |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Embedding Latency** | `6.72` | `9.90` | `11.36` | `7.28` | `6.33` | `11.73` | ms |
-| **Retrieval Latency** | `11.54` | `19.13` | `24.69` | `12.93` | `10.37` | `26.08` | ms |
-| **Generation Latency (Mock)** | `0.02` | `0.02` | `0.02` | `0.01` | `0.00` | `0.02` | ms |
-| **End-to-End Latency** | **`15.66`** | **`19.79`** | **`20.00`** | **`16.23`** | `14.33` | `20.06` | ms |
-
-> [!NOTE]
-> When using external LLM APIs (e.g. Groq, OpenAI, Anthropic, Gemini), generation latency will be dominated by network round-trip and provider inference times (~200ms–1500ms). The local embedding and hybrid retrieval stages remain consistent at ~10ms–40ms.
-
----
-
-## 4. Benchmark Invariant Checklist
-
-- [x] **Zero Unauthorized Leakage Invariant**: Verified across all RBAC role/clearance boundaries.
-- [x] **Reproducible Fixtures**: 100% deterministic test data with no random network dependencies.
-- [x] **Prompt Injection Quarantine**: Flagged documents are safely wrapped in untrusted data boundaries.
-- [x] **Cryptographic Decryption**: Verified AES-256-GCM authenticated decryption prior to synthesis.
-- [x] **Structured Telemetry**: Latency distributions and audit logs recorded without fabricating results.
-
-```json
-// Benchmark execution signature:
-{
-  "timestamp": "2026-09-02T18:20:51.949535+00:00",
-  "mrr": 1.0,
-  "unauthorized_retrieval_rate": 0.0,
-  "prompt_injection_detection_rate": 1.0,
-  "e2e_p50_ms": 15.661599999930331
-}
+```bash
+python scripts/eval_beir.py --datasets scifact fiqa
+python scripts/benchmark_scale.py --docs 1000 --label phase6_docs_1000
+python scripts/benchmark_scale.py --docs 10000 --label phase6_docs_10000
+python scripts/benchmark_scale.py --docs 50000 --label phase6_docs_50000 --timeout 7200
+python scripts/plot_scale.py --prefix phase6
+python scripts/evaluate.py
 ```

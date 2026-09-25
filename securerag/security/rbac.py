@@ -1,4 +1,5 @@
 
+import hashlib
 from typing import TypedDict
 
 
@@ -60,6 +61,17 @@ def partition_name(department: str, clearance: str) -> str:
     return f"{department}.{clearance}"
 
 
+def partition_code(partition: str) -> str:
+    """Stable 4-hex code of a partition, used as the chunk-ID prefix (see ID_SCHEME)."""
+    return hashlib.sha256(partition.encode("utf-8")).hexdigest()[:4]
+
+
+# Chunk IDs are ``<partition code (4 hex)><keyed hash (28 hex)>``. Vector search can then drop
+# unauthorized candidates by ID alone, without fetching their metadata. The code only restates
+# the partition, which is already stored in plaintext metadata.
+ID_SCHEME = "pp1"
+
+
 def all_partitions() -> list[str]:
     return [partition_name(d, c) for d in sorted(DEPARTMENTS) for c in CLEARANCE_LEVELS]
 
@@ -119,3 +131,7 @@ def metadata_matches_filter(metadata: dict, where: dict | None) -> bool:
             elif actual != value:
                 return False
     return True
+
+
+_codes = {partition_code(p) for p in all_partitions()}
+assert len(_codes) == len(all_partitions()), "partition codes collide; change partition_code()"

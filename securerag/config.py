@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     qdrant_url: str = ""
     qdrant_path: str = "./data/qdrant"
     qdrant_api_key: str = ""
+    chroma_prefilter: Literal["overfetch", "strict"] = "overfetch"
 
     # Retrieval
     top_k: int = Field(default=5, ge=1, le=50)

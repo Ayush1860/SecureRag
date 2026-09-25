@@ -223,5 +223,28 @@ def test_chroma_dense_query_uses_partition_prefilter(rag_stack, monkeypatch):
         return real(**kw)
 
     monkeypatch.setattr(store.collection, "query", spy)
+    monkeypatch.setattr(store, "prefilter", "strict")
     rag_stack["engine"].query("Q3 gross margin cash runway", "guest", 5)
     assert seen == [{"partition": "general.public"}]
+
+    # Overfetch mode: unfiltered HNSW first, falling back to the strict filter when too few allowed
+    # rows come back; either way only allowed chunks leave the store.
+    seen.clear()
+    monkeypatch.setattr(store, "prefilter", "overfetch")
+    res = rag_stack["engine"].query("Q3 gross margin cash runway", "guest", 5)
+    assert seen[0] is None and seen[-1] in (None, {"partition": "general.public"})
+    assert all(h.metadata["partition"] == "general.public" for h in res["retrieved"])
+
+
+@pytest.mark.parametrize("role", ["guest", "employee", "finance_lead"])
+def test_chroma_overfetch_and_strict_prefilter_agree(rag_stack, role):
+    store = rag_stack["stack"].store
+    vec = FakeEncoder().encode(["gross margin revenue onboarding navigation LiDAR"])[0].tolist()
+    where = build_chroma_filter(role)
+    store.prefilter = "strict"
+    strict = store.query(vec, 3, where)
+    store.prefilter = "overfetch"
+    overfetch = store.query(vec, 3, where)
+    assert [c for c, _ in overfetch] == [c for c, _ in strict]
+    metas = dict(store.get_metadata([c for c, _ in overfetch]))
+    assert all(authorize(role, m) for m in metas.values())

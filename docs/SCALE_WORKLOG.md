@@ -579,3 +579,102 @@ I made these calls without asking, as you instructed. Restore with
 - `pytest -q`: 160 passed. `ruff check`: clean. `mypy securerag`: clean.
 
 **Commit:** `feat(runtime): LLM router with retries/fallbacks, SSE, readiness, JSON logs, admin ingest, Docker, CI`
+
+---
+
+## Phase 6 — Evaluation at real scale
+
+### Dense RBAC filtering on Chroma, round 2 (found by the 10k/50k runs)
+- With strict filtering, retrieval p95 for employee/finance_lead reached ~100 ms at 31k chunks, while
+  exec (no filter) stayed at 27 ms. The first 50k run served with an early over-fetch variant that
+  read metadata for every candidate, and its employee p95 was ~550 ms. That run was superseded, and
+  strict filtering was never measured at 50k.
+- Profiling at 31k chunks: HNSW itself is cheap (top-2000 IDs in 9 ms). The cost is **metadata
+  reads, ~0.09 ms per row**, which both Chroma's `where` filter and a naive over-fetch pay. A first
+  over-fetch that read metadata for 800-2000 candidates made guest *slower* (50 → 138 ms), so I
+  dropped it.
+- **Partition-prefixed chunk IDs** (`ID_SCHEME = "pp1"`): chunk ID = `sha256(partition)[:4]` +
+  28-hex keyed hash (still 32 hex, so the Qdrant UUID mapping is unchanged).
+  - Over-fetch now asks HNSW for IDs + distances only, keeps IDs whose prefix is allowed, and reads
+    metadata for the final `n` only, re-checking it with `metadata_matches_filter`. A mismatch
+    between ID and metadata falls back to the exact filter.
+  - The prefix restates the partition, which is already plaintext metadata, so no new information
+    is exposed.
+  - Relabelling a document now changes its chunk IDs; the pipeline's stale-ID cleanup already
+    handles that.
+  - `ID_SCHEME` is part of each file fingerprint and the store identity, so an older store is
+    re-ingested rather than served with mismatched IDs.
+- **Adaptive strategy:** the pipeline records per-partition chunk counts in the store info at the
+  end of each run. A role seeing < 15% of the corpus (guest) uses the exact filter, which is cheap
+  because few rows match. Larger roles over-fetch with k = 4n/f, then 16n/f, then 8000 (f = allowed
+  fraction), and fall back to exact. `CHROMA_PREFILTER=strict` disables over-fetch.
+- **Side effect found by the relabel-attack test:** with prefixed IDs, a chunk whose metadata was
+  relabelled in the vector DB is dropped by the ID check before decryption. The strict path still
+  relies on AAD, and that test now covers both paths.
+- The strict-filter results for 1k/10k are kept as `reports/scale/phase6strict_docs_*` for comparison.
+- Remaining limit: guest-style queries are bounded by Chroma's metadata scan (~47 ms p95 at 31k
+  chunks). Qdrant with payload indexes is the backend for that regime. It is implemented and tested
+  in `:memory:` mode, but I couldn't benchmark it as a server here because Docker isn't available.
+
+### Final results
+
+**Scale**, from `reports/scale/phase6_docs_{1000,10000,50000}.md`. The last column is retrieval p95
+per role (ms): exec / employee / finance_lead / guest.
+
+| Docs | Chunks | Chunks/s | Ingest RSS | Serve RSS | Store open + key check | Leaks | Escalations | Retrieval p95 |
+|---|---|---|---|---|---|---|---|---|
+| 1,000 | 3,101 | 84 | 1,074 MB | 1,069 MB | 1.14 s | 0 | 0/25 | 21 / 25 / 21 / 19 |
+| 10,000 | 31,429 | 120 | 1,165 MB | 1,180 MB | 1.36 s | 0 | 0/25 | 28 / 36 / 30 / 47 |
+| 50,000 | 155,860 | 114 | 1,412 MB | 1,561 MB | 2.04 s | 0 | 0/25 | 49 / 99 / 57 / 156 |
+
+- **Strict vs adaptive at 10k** (`phase6strict_docs_10000` vs `phase6_docs_10000`): employee
+  102 → 36 ms, finance_lead 101 → 30 ms, guest 50 → 47 ms, exec 29 → 28 ms.
+- **Startup:** the store-dependent part grows 1.1 → 2.0 s over 50× more chunks (count, the sampled
+  key check, sparse manifest reads). The ~9.4 s embedding-model load is constant. The previous
+  design decrypted every chunk at startup.
+- **Memory is not perfectly flat.** Ingest peak RSS goes 1.07 → 1.41 GB from 3k to 156k chunks.
+  The main contributors are the per-partition bm25s rebuild at the end of a run (it holds one
+  partition's hashed-term matrix, ~10k chunks at 50k docs) and Chroma's own caches. Serve RSS grows
+  1.07 → 1.56 GB, mostly the loaded sparse partitions plus Chroma's HNSW index in memory. Both grow
+  far slower than the corpus (50×).
+- **Injection detection** (regex only, per chunk): 56-58% with 0 false positives. Half the planted
+  payloads are paraphrased on purpose (`EVASIVE_INJECTION_PAYLOADS`), so this number isn't
+  self-fulfilling.
+
+**BEIR** (`reports/beir/*.md`). nDCG@10 for exec (whole corpus):
+
+| Dataset | Dense | Sparse | Hybrid | Hybrid + rerank | Published MiniLM-L6 / BM25 |
+|---|---|---|---|---|---|
+| SciFact | 0.657 | 0.620 | 0.682 | 0.699 | ~0.645 / ~0.665 |
+| FiQA | 0.375 | 0.223 | 0.342 | 0.376 | ~0.369 / ~0.236 |
+
+- Dense matches published MiniLM numbers, so the encrypted pipeline costs no quality. Sparse is a
+  few points under Anserini BM25 because the tokenizer has no stemming.
+- On FiQA the weak sparse side pulls RRF below dense-only, and the cross-encoder recovers it.
+  Possible follow-ups: stemming in the sparse tokenizer, and weighted RRF.
+- 0 leaks in all 32 role × mode × dataset combinations.
+- The reranker is `cross-encoder/ms-marco-MiniLM-L-6-v2` (~90 MB). The configured default
+  `BAAI/bge-reranker-base` wasn't downloaded.
+
+### Downloads made during this phase
+- BEIR SciFact (2.8 MB) and FiQA (~17 MB) from `public.ukp.informatik.tu-darmstadt.de`, cached in
+  `data/beir/` (git-ignored). The certifi CA bundle is used because this Python lacked an
+  intermediate certificate; TLS verification stays on.
+- `cross-encoder/ms-marco-MiniLM-L-6-v2` from Hugging Face.
+
+### Added
+- `scripts/eval_beir.py`, `scripts/plot_scale.py`.
+- `scripts/evaluate.py` now builds `reports/evaluation.{md,json}` from the runs. The old 5-doc
+  suite is behind `--fixture` and writes to `reports/fixture/`.
+- Benchmark: per-chunk injection detection vs ground truth, and a role-spoofing suite over the
+  real API in api_key mode.
+- Generator: paraphrased injection payloads.
+- Store: partition-prefixed chunk IDs, adaptive dense pre-filter, partition counts in the store
+  info, and `CHROMA_PREFILTER` setting.
+- Docs: README rewritten with real numbers; `docs/resume_bullets.md` and `docs/interview_notes.md`
+  updated.
+
+### Tests
+`pytest -q`: 163 passed. ruff and mypy clean.
+
+**Commit:** `feat(eval): BEIR under RBAC, 1k/10k/50k security+scale runs, adaptive dense pre-filter`

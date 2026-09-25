@@ -11,6 +11,7 @@ input upserts identical IDs and a crashed run can simply be re-run.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import time
 import uuid
@@ -32,6 +33,7 @@ from securerag.retrieval.embedder import model_max_tokens, token_length_fn
 from securerag.retrieval.vector_store import VectorStore
 from securerag.security.encryption import INDEX_KEY_LABEL, VectorStoreEncryptor, chunk_aad, keyed_hash
 from securerag.security.injection import InjectionDetector
+from securerag.security.rbac import ID_SCHEME, partition_code, partition_name
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +185,7 @@ class IngestPipeline:
     # ------------------------------------------------------------------ setup
     def _store_identity(self) -> dict[str, str]:
         return {"embed_model": self.settings.embed_model, "index_key_id": self.encryptor.index_key_id,
-                "chunker": f"{CHUNKER_VERSION}:{self.max_tokens}:{self.overlap}"}
+                "chunker": f"{CHUNKER_VERSION}:{self.max_tokens}:{self.overlap}", "id_scheme": ID_SCHEME}
 
     def _prepare_store(self, full_rebuild: bool) -> None:
         assert self.store is not None and self.state is not None
@@ -253,7 +255,7 @@ class IngestPipeline:
             return _Prepared(cand, STATUS_FAILED, error=f"read failed: {exc}")
         fingerprint = keyed_hash(self.index_key, hashlib.sha256(raw).hexdigest(), labels.department,
                                  labels.clearance, self.settings.embed_model, self.settings.embed_doc_prefix,
-                                 f"{CHUNKER_VERSION}:{self.max_tokens}:{self.overlap}")
+                                 f"{CHUNKER_VERSION}:{self.max_tokens}:{self.overlap}:{ID_SCHEME}")
         if fingerprint == cand.prev_fingerprint:
             return _Prepared(cand, "unchanged", fingerprint=fingerprint, labels=labels)
         try:
@@ -304,6 +306,9 @@ class IngestPipeline:
         self._delete_missing(root_key, seen, report, dry_run)
         if not dry_run:
             self._rebuild_sparse(report)
+            if self.state is not None and self.store is not None:
+                # Lets the vector store pick the cheapest RBAC pre-filter strategy per role.
+                self.store.set_info({"partition_counts": json.dumps(self.state.partition_counts())})
 
     def _note_partition(self, doc_id: str) -> None:
         """Remember the partition a document currently lives in (before its state changes)."""
@@ -337,7 +342,8 @@ class IngestPipeline:
             ids, payloads, metadatas = [], [], []
             for (doc, chunk), flagged in zip(rows, injection_flags):
                 assert doc.labels is not None
-                cid = keyed_hash(self.index_key, doc.cand.doc_id, str(chunk.index), chunk.text)
+                cid = partition_code(partition_name(doc.labels.department, doc.labels.clearance)) + keyed_hash(
+                    self.index_key, doc.cand.doc_id, str(chunk.index), chunk.text, length=28)
                 ids.append(cid)
                 payloads.append(self.encryptor.encrypt(
                     chunk.text, aad=chunk_aad(cid, doc.labels.department, doc.labels.clearance)))

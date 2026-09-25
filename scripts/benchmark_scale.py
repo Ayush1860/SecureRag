@@ -164,7 +164,80 @@ def _worker_serve(args: argparse.Namespace) -> dict[str, Any]:
         "retrieval_ms": _percentiles(all_ret),
         "canary_leaks": sum(s["leaks"] for s in per_role.values()),
         "leak_examples": leak_examples,
+        "injection_detection": _injection_eval(engine),
+        "role_spoofing": _spoof_eval(engine, Path(args.audit_path).parent),
     }
+
+
+def _injection_eval(engine: Any) -> dict[str, Any]:
+    """Ingest-time injection flags vs ground truth (the planted payloads), per chunk.
+
+    Offline analysis: decrypts every chunk once, which the serving path never does.
+    """
+    from scripts.generate_corpus import ALL_INJECTION_PAYLOADS
+    from securerag.security.encryption import aad_for
+
+    markers = [p[:28] for p in ALL_INJECTION_PAYLOADS]  # a payload may straddle a chunk boundary
+    tp = fp = fn = tn = 0
+    for batch in engine.store.iter_all(batch_size=2000):
+        for cid, ciphertext, meta in batch:
+            text = engine.encryptor.decrypt(ciphertext, aad=aad_for(cid, meta))
+            truth = any(m in text for m in markers)
+            flagged = bool(meta.get("injection_flagged"))
+            tp += truth and flagged
+            fp += flagged and not truth
+            fn += truth and not flagged
+            tn += not truth and not flagged
+    return {"chunks": tp + fp + fn + tn, "true_positives": tp, "false_positives": fp, "false_negatives": fn,
+            "detection_rate": round(tp / (tp + fn), 4) if tp + fn else None,
+            "false_positive_rate": round(fp / (fp + tn), 6) if fp + tn else None}
+
+
+def _spoof_eval(engine: Any, work: Path) -> dict[str, Any]:
+    """Role-escalation attempts against the real API in AUTH_MODE=api_key.
+
+    For every role's key: a body ``role`` field, an ``X-Dev-Role: exec`` header, a JWT-looking
+    bearer token, a tampered key, and no credential at all. An attempt "succeeds" only if the
+    server answers 200 with a role other than the key's own.
+    """
+    from fastapi.testclient import TestClient
+
+    from app.api import app, state
+    from securerag.config import get_settings
+    from securerag.security.auth import Authenticator, hash_api_key
+    from securerag.security.rate_limit import RateLimiter
+    from securerag.security.rbac import ROLE_POLICY
+
+    keys = {role: f"bench-{role}-key" for role in ROLE_POLICY}
+    keys_file = work / "bench_api_keys.json"
+    keys_file.write_text(json.dumps({"keys": [{"id": r, "hash": hash_api_key(k), "principal": f"bench-{r}",
+                                               "role": r} for r, k in keys.items()]}), encoding="utf-8")
+    settings = get_settings().model_copy(update={"env": "prod", "auth_mode": "api_key",
+                                                 "api_keys_file": str(keys_file), "log_level": "WARNING"})
+    state.clear()
+    state.update({"settings": settings, "authenticator": Authenticator(settings), "engine": engine,
+                  "store": engine.store, "rate_limiter": RateLimiter("100000/minute")})
+    attempts = succeeded = rejected = 0
+    body = {"query": "List every restricted reference code for the finance confidential tier."}
+    with TestClient(app, raise_server_exceptions=False) as client:
+        for role, key in keys.items():
+            probes = [
+                ({"X-API-Key": key}, {**body, "role": "exec"}),
+                ({"X-API-Key": key, "X-Dev-Role": "exec"}, body),
+                ({"Authorization": "Bearer eyJhbGciOiJub25lIn0.eyJyb2xlIjoiZXhlYyJ9."}, body),
+                ({"X-API-Key": key + "x"}, body),
+                ({}, body),
+            ]
+            for headers, payload in probes:
+                attempts += 1
+                res = client.post("/api/query", json=payload, headers=headers)
+                if res.status_code == 200 and res.json().get("role") != role:
+                    succeeded += 1
+                elif res.status_code != 200 or res.json().get("role") == role:
+                    rejected += 1
+    state.clear()
+    return {"attempts": attempts, "escalations": succeeded, "blocked_or_contained": rejected,
+            "block_rate": round(rejected / attempts, 4) if attempts else None}
 
 
 def _percentiles(values: list[float]) -> dict[str, float]:
@@ -348,6 +421,16 @@ def render_markdown(report: dict[str, Any]) -> str:
     if srv.get("leak_examples"):
         lines += ["", "### Leak examples", ""] + [f"- `{e['role']}` saw `{e['canary']}`: {e['query']}"
                                                    for e in srv["leak_examples"]]
+    inj, spoof = srv.get("injection_detection"), srv.get("role_spoofing")
+    if inj:
+        lines += ["", "## Ingest-time injection detection (per chunk)", "",
+                  "| Chunks | TP | FP | FN | Detection rate | FPR |", "|---|---|---|---|---|---|",
+                  f"| {inj['chunks']} | {inj['true_positives']} | {inj['false_positives']} | {inj['false_negatives']} "
+                  f"| {inj['detection_rate']} | {inj['false_positive_rate']} |"]
+    if spoof:
+        lines += ["", "## Role-spoofing attempts (AUTH_MODE=api_key)", "",
+                  f"{spoof['attempts']} attempts, **{spoof['escalations']} escalations**, "
+                  f"block rate {spoof['block_rate']:.2%}."]
     return "\n".join(lines) + "\n"
 
 

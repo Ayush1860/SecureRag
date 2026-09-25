@@ -19,3 +19,4 @@ data/audit*.jsonl*
 data/api_keys.json
 data/keyring.json
 *.jsonl.lock
+data/beir/
