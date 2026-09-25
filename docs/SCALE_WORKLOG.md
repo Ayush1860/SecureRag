@@ -750,3 +750,96 @@ Run **Actions → Docker + Qdrant benchmark** with `docs=10000`, then `docs=5000
 projects it under 4.5 h. Download the `gha_qdrant_docs_*` artifacts into `reports/scale/` and
 commit them. Until that job passes, the Phase 5 note that the Dockerfile and compose are
 "not built locally" still applies.
+
+## Prompt 2 — Lambda-ready backend
+
+### Decision: demo corpus is built in CI, option (a) (the plan asked for your choice; I picked (a))
+| | (a) Ingest at image build, key via `docker build --secret` | (b) Plaintext docs in image, ingest into /tmp on cold start |
+|---|---|---|
+| Cold start | Copy ~60 MB of index to /tmp (~1 s) plus the usual ~15-20 s of torch/model load | Embeds ~3.7k chunks on Lambda CPU (~2 vCPU at 3 GB): minutes, which blows the 60 s timeout on every cold start |
+| Plaintext in image | None: ciphertext, vectors and HMAC terms only; the corpus stays in the discarded build stage | The whole demo corpus |
+| Key handling | The key exists only during one `RUN` (BuildKit secret mount), never in a layer; CI fetches it from SSM | The key is only fetched at runtime |
+| Cost | Rotating the key means rebuilding the image | No rebuild on rotation |
+
+(b) doesn't survive the cold-start budget and ships plaintext, so I chose **(a)**. To switch,
+replace the `demo-index` stage with a copy of the corpus and call `run_ingestion` from
+`prepare_lambda_environment`.
+
+### Added / changed
+- `Dockerfile` restructured: `frontend` → `builder` → `app-base` → `demo-index` → `lambda`, with
+  `runtime` kept last so it stays the default target used by compose.
+  - `demo-index` generates a 1k-doc synthetic corpus (seed 7), merges `data/sample` into it,
+    ingests with the AES key from the `aes_key` build secret, and asserts 0 rejected/failed files.
+  - `lambda` adds Lambda Web Adapter **0.8.4** (pinned, copied from `public.ecr.aws/awsguru`),
+    copies only `/opt/demo/index`, and sets:
+    - `AWS_LWA_READINESS_CHECK_PATH=/api/health`, port 8000;
+    - **`AWS_LWA_ASYNC_INIT=true`**, because on-demand init times out at 10 s and torch plus model
+      load takes longer. Async init stops Lambda from throwing away and restarting a slow init
+      (per the aws-serverless skill notes);
+    - `LAMBDA_MODE=1`, `HOME` and caches under `/tmp`, reranker off, `LLM_FALLBACKS=refusal`.
+  - CPU-only torch as before. `runtime` no longer chowns `/app` (it's read-only for the app user
+    anyway); `/data` is still owned by `app`.
+- `securerag/runtime/lambda_mode.py`: `is_lambda()` (`LAMBDA_MODE` or `AWS_LAMBDA_FUNCTION_NAME`)
+  and `prepare_lambda_environment()`, which:
+  - loads secrets from SSM via boto3 (`SSM_AES_KEY_PARAM` and `SSM_API_KEYS_PARAM` required,
+    `SSM_GROQ_KEY_PARAM` optional) and fails fast, naming the missing parameters;
+  - writes the hashed keys to `/tmp/securerag/api_keys.json` (0600);
+  - copies the baked index to `/tmp/securerag/index` and points the store, state DB, sparse dir
+    and audit log there;
+  - refuses `ENV=dev` / `AUTH_MODE=dev`;
+  - sets `AUDIT_STDOUT`.
+- `app/api.py`:
+  - the lifespan applies Lambda mode on cold start;
+  - no `CORSMiddleware` in Lambda mode;
+  - admin ingest endpoints return 404;
+  - no job manager is created.
+- `audit.py`: with `AUDIT_STDOUT` set, each chained entry is also written to stdout as
+  `{"audit": …}`, which ends up in CloudWatch Logs.
+- Frontend:
+  - `VITE_API_BASE` sets the API origin (default `""`, so local and compose keep using relative
+    `/api`);
+  - on load it polls `/api/ready` every 4 s for up to ~2 min, showing "Waking up the demo backend
+    (~20 s)…" instead of an error.
+- `.github/workflows/docker-bench.yml`: new step that builds `--target lambda` with a throwaway
+  masked key and checks:
+  - the adapter and the encrypted index are present;
+  - `/build` (the plaintext corpus) is absent;
+  - the key is not in `docker history`;
+  - the key is not found anywhere in `/opt /app /etc`.
+- Deps: `boto3` (runtime); `moto[ssm]` in the `dev` extra and the CI test install.
+- `SECURITY.md`: new "AWS Lambda deployment" section:
+  - SSM secrets;
+  - build-secret index;
+  - dev auth refused;
+  - **the audit chain is per container**, with stdout as the durable record;
+  - per-container rate limits;
+  - CORS handled by the Function URL.
+
+### Tests: `tests/test_lambda_mode.py` (14)
+- Lambda detection.
+- SSM via moto: loading, the optional Groq key, missing required parameters, and a missing
+  parameter-name env var.
+- `/tmp` relocation of every writable path.
+- Dev auth refused (2 cases); missing baked index fails.
+- No CORS middleware in Lambda mode, present outside it.
+- Admin endpoints return 404.
+- **A real cold start:** real model and persistent Chroma. An index is baked with a key, the API
+  starts in Lambda mode with moto SSM, then:
+  - `/api/ready` returns 200;
+  - guest can't see the margin and exec can;
+  - an unauthenticated query gets 401 and admin ingest is disabled;
+  - audit JSON reaches stdout;
+  - nothing is written next to the baked index.
+
+Two test-isolation traps showed up and are fixed:
+- `importlib.reload(app.api)` rebinds `state`, so the fixture keeps the original dict object.
+- `prepare_lambda_environment` writes to `os.environ`, so those variables are registered with
+  monkeypatch to be restored.
+
+`pytest` 180 passed (two consecutive runs); ruff and mypy clean; `vite build` passes with and
+without `VITE_API_BASE`.
+
+### Not verifiable here
+- The `lambda` image build (no local Docker). The docker-bench workflow now builds and inspects it.
+- LWA 0.8.4's async-init behaviour on real Lambda. Check the first cold start's `INIT_REPORT` in
+  CloudWatch.

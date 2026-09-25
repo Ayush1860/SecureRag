@@ -46,7 +46,7 @@ jobs:
       - name: Install (CPU torch)
         run: |
           pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.2,<3"
-          pip install -r requirements.txt
+          pip install -r requirements.txt "moto[ssm]>=5,<6"
       - name: pytest
         run: pytest -q
       - name: Scale smoke benchmark (fails on any canary leak)

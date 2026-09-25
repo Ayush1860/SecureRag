@@ -218,7 +218,12 @@ def audit_event(
         "status": status,
         **extra,
     }
-    return get_audit_log(path).append(event)
+    record = get_audit_log(path).append(event)
+    if os.getenv("AUDIT_STDOUT"):
+        # Lambda: /tmp is per container and short-lived, so each chained entry also goes to stdout
+        # (CloudWatch Logs) as one JSON line.
+        print(json.dumps({"audit": record}, ensure_ascii=False), flush=True)
+    return record
 
 
 def read_recent_audit_events(path: str, limit: int = 50) -> list[dict[str, Any]]:

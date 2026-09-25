@@ -47,6 +47,27 @@ protects, against whom, how, and what it deliberately does **not** protect again
 | T13 | Cross-site requests from other origins | CORS allows only `CORS_ORIGINS` (empty = same origin), with no credentials and no wildcard. Auth travels in headers, not cookies. | — |
 | T14 | Poisoned or mislabelled source documents | Labels come from a sidecar, then `manifest.csv`, then the folder convention, and are validated. Missing or invalid labels mean the file is rejected (fail closed). Relabelling or rejecting a document removes its old chunks. | Whoever controls the source folder controls the labels. Protect the ingestion input like the data itself. |
 
+## AWS Lambda deployment (demo)
+
+- **Secrets:** the AES key, the hashed API keys and the Groq key live in SSM Parameter Store
+  (SecureString, AWS-managed `aws/ssm` key). The function's environment only names the parameters,
+  and startup fails if a required one is missing. The execution role may read `/securerag/*` only.
+- **The demo index is built at image build time.** The AES key is passed as a BuildKit secret
+  mount (`--secret id=aes_key`), which never reaches an image layer. The image contains
+  ciphertext, vectors and hashed terms, **not** the plaintext demo corpus (that stays in the
+  discarded build stage). Rotating the key means rebuilding the image.
+- **Dev auth can't be deployed:** Lambda mode refuses `ENV=dev` and `AUTH_MODE=dev` at startup.
+- **The audit hash chain is per container instance.** It lives in `/tmp` and disappears when
+  Lambda recycles the container. Every entry is also written to stdout as JSON, so CloudWatch
+  Logs has the complete record, but chain verification only covers a single container's
+  lifetime. For a durable, verifiable chain, ship entries to a single writer
+  (e.g. SQS → one consumer) or to write-once storage.
+- **Rate limits are per container,** with reserved concurrency 2, so the effective limit is up to
+  2× `RATE_LIMIT` per principal.
+- **Admin ingestion is disabled** (404) and nothing is written outside `/tmp`.
+- **CORS is answered by the Function URL,** so FastAPI's CORS middleware is not installed (a
+  second `Access-Control-Allow-Origin` header would break browsers).
+
 ## Known limitations (summary)
 
 - Embedding inversion (T5): the vectors aren't encrypted, so similarity search keeps working.

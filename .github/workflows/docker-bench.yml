@@ -58,6 +58,24 @@ jobs:
           docker image ls securerag
           df -h /
 
+      - name: Build the Lambda target (throwaway key) and inspect it
+        run: |
+          python3 -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())" > "$RUNNER_TEMP/aes_key"
+          echo "::add-mask::$(cat "$RUNNER_TEMP/aes_key")"
+          DOCKER_BUILDKIT=1 docker build --target lambda             --secret id=aes_key,src="$RUNNER_TEMP/aes_key" -t securerag:lambda .
+          docker run --rm --entrypoint sh securerag:lambda -c '
+            test -x /opt/extensions/lambda-adapter && echo "adapter ok" &&
+            test -f /opt/demo/index/ingest_state.sqlite && echo "encrypted index ok" &&
+            test ! -e /build && echo "no plaintext demo corpus in image"'
+          KEY=$(cat "$RUNNER_TEMP/aes_key")
+          if docker history --no-trunc securerag:lambda | grep -qF "$KEY"; then
+            echo "AES key leaked into image history"; exit 1
+          fi
+          docker run --rm --entrypoint sh securerag:lambda -c "! grep -rqsF '$KEY' /opt /app /etc 2>/dev/null"             && echo "key not present in image filesystem"
+          rm -f "$RUNNER_TEMP/aes_key"
+          docker image ls securerag
+          df -h /
+
       - name: Start Qdrant and wait for it
         run: |
           docker compose up -d qdrant

@@ -19,6 +19,11 @@ import AuditTrailModal from './components/AuditTrailModal';
 import CredentialPanel from './components/CredentialPanel';
 
 const CREDENTIAL_KEY = 'securerag.credential';
+// API origin: empty for local dev / docker-compose (same-origin /api), the Lambda Function URL on Amplify.
+const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '');
+const api = (path) => `${API_BASE}${path}`;
+const READY_POLL_MS = 4000;
+const READY_MAX_TRIES = 30; // ~2 minutes before giving up and showing "offline"
 
 function readCredential() {
   try {
@@ -47,6 +52,8 @@ export default function App() {
   const [topK, setTopK] = useState(5);
   const [loading, setLoading] = useState(false);
   const [backendOnline, setBackendOnline] = useState(false);
+  // A cold Lambda needs ~20 s (torch import + model load); poll /api/ready instead of failing.
+  const [backendWaking, setBackendWaking] = useState(true);
   const [chunkCount, setChunkCount] = useState(0);
   const [errorMessage, setErrorMessage] = useState(null);
 
@@ -68,7 +75,7 @@ export default function App() {
   useEffect(() => {
     checkHealth();
     fetchRoles();
-    fetch('/api/auth/mode')
+    fetch(api('/api/auth/mode'))
       .then((r) => (r.ok ? r.json() : { mode: 'api_key' }))
       .then((data) => setAuthMode(data.mode))
       .catch(() => setAuthMode('api_key'));
@@ -83,7 +90,7 @@ export default function App() {
   const signIn = async (cred) => {
     setAuthError(null);
     try {
-      const res = await fetch('/api/auth/me', { headers: authHeaders(cred) });
+      const res = await fetch(api('/api/auth/me'), { headers: authHeaders(cred) });
       if (!res.ok) throw new Error('Credential rejected');
       const me = await res.json();
       try {
@@ -112,24 +119,31 @@ export default function App() {
     setAuditLogs([]);
   };
 
-  const checkHealth = async () => {
+  const checkHealth = async (attempt = 0) => {
     try {
-      const res = await fetch('/api/health');
+      const res = await fetch(api('/api/ready'));
       if (res.ok) {
         const data = await res.json();
         setBackendOnline(true);
-        setChunkCount(data.chunks || 0);
-      } else {
-        setBackendOnline(false);
+        setBackendWaking(false);
+        setChunkCount((data.checks && data.checks.chunks) || 0);
+        return;
       }
     } catch {
-      setBackendOnline(false);
+      /* cold start in progress or network hiccup: retry below */
+    }
+    setBackendOnline(false);
+    if (attempt < READY_MAX_TRIES) {
+      setBackendWaking(true);
+      setTimeout(() => checkHealth(attempt + 1), READY_POLL_MS);
+    } else {
+      setBackendWaking(false);
     }
   };
 
   const fetchRoles = async () => {
     try {
-      const res = await fetch('/api/roles');
+      const res = await fetch(api('/api/roles'));
       if (res.ok) {
         const data = await res.json();
         setRolePolicies(data);
@@ -142,7 +156,7 @@ export default function App() {
   const fetchAuditTrail = async () => {
     setAuditLoading(true);
     try {
-      const res = await fetch('/api/audit?limit=25', { headers: authHeaders() });
+      const res = await fetch(api('/api/audit?limit=25'), { headers: authHeaders() });
       if (res.ok) {
         const logs = await res.json();
         setAuditLogs(logs);
@@ -165,7 +179,7 @@ export default function App() {
     setErrorMessage(null);
 
     try {
-      const res = await fetch('/api/query', {
+      const res = await fetch(api('/api/query'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         // No role in the body: the server derives it from the authenticated principal.
@@ -223,7 +237,9 @@ export default function App() {
             <span>
               {backendOnline
                 ? `System Online (${chunkCount} chunks)`
-                : 'System Offline'}
+                : backendWaking
+                  ? 'Waking up the demo backend (~20 s)…'
+                  : 'System Offline'}
             </span>
           </div>
 

@@ -28,6 +28,7 @@ from securerag.ingestion.jobs import IngestJobManager, JobConflict
 from securerag.logging_config import configure_logging, request_id_var
 from securerag.pipeline.graph import SecureRAG
 from securerag.retrieval.store import build_engine, open_serving_stack
+from securerag.runtime.lambda_mode import is_lambda, prepare_lambda_environment
 from securerag.security.audit import get_audit_log, read_recent_audit_events
 from securerag.security.auth import Authenticator, AuthError, Principal
 from securerag.security.encryption import VectorStoreEncryptor
@@ -38,6 +39,7 @@ logger = logging.getLogger("securerag.api")
 
 # Global application state holder (tests inject components here before startup).
 state: dict[str, Any] = {}
+LAMBDA = is_lambda()
 
 
 def _settings() -> Settings:
@@ -48,6 +50,10 @@ def _settings() -> Settings:
 async def lifespan(app: FastAPI):
     injected = set(state)
     settings = _settings()
+    if LAMBDA and "engine" not in state:
+        # SSM secrets, /tmp paths, dev-auth refusal. Misconfiguration fails the cold start.
+        settings = prepare_lambda_environment(settings)
+        state["settings"] = settings
     state.setdefault("settings", settings)
     configure_logging(settings.log_format, settings.log_level)
     if "authenticator" not in state:
@@ -69,7 +75,7 @@ async def lifespan(app: FastAPI):
         state["ready_checks"] = {"store_verified": True, "embedder_warm": True,
                                  "sparse_partitions": stack.sparse.warm()}
         logger.info("startup complete: backend=%s chunks=%d", stack.store.backend, stack.store.count())
-    if "jobs" not in state and "encoder" in state:
+    if "jobs" not in state and "encoder" in state and not LAMBDA:
         state["jobs"] = IngestJobManager(settings, state["encryptor"], state["store"], state["encoder"])
     yield
     for key in set(state) - injected:
@@ -83,15 +89,18 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-_boot_settings = get_settings()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_boot_settings.cors_origin_list,
-    allow_credentials=False,  # auth travels in headers, never cookies
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Dev-Role", "X-Request-ID"],
-    expose_headers=["X-Request-ID"],
-)
+if not LAMBDA:
+    # On Lambda the Function URL answers CORS itself. Adding FastAPI's middleware too would send a
+    # second Access-Control-Allow-Origin header, which browsers reject.
+    _boot_settings = get_settings()
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_boot_settings.cors_origin_list,
+        allow_credentials=False,  # auth travels in headers, never cookies
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Dev-Role", "X-Request-ID"],
+        expose_headers=["X-Request-ID"],
+    )
 
 
 @app.middleware("http")
@@ -313,7 +322,9 @@ def require_admin(principal: Principal = Depends(rate_limited)) -> Principal:
 @app.post("/api/admin/ingest", status_code=202)
 def start_ingest(body: IngestJobRequest, request: Request, principal: Principal = Depends(require_admin)):
     """Start a background ingestion of DATA_DIR (the server's configured folder only; no
-    client-supplied paths)."""
+    client-supplied paths). Not available on Lambda (read-only demo corpus)."""
+    if LAMBDA:
+        raise HTTPException(status_code=404, detail="Not available in this deployment")
     jobs: IngestJobManager | None = state.get("jobs")
     if jobs is None:
         raise HTTPException(status_code=503, detail="Ingestion is not available")
@@ -331,7 +342,7 @@ def start_ingest(body: IngestJobRequest, request: Request, principal: Principal 
 
 @app.get("/api/admin/ingest/{job_id}")
 def ingest_status(job_id: str, principal: Principal = Depends(require_admin)):
-    if not re.fullmatch(r"[0-9a-f]{12}", job_id):
+    if LAMBDA or not re.fullmatch(r"[0-9a-f]{12}", job_id):
         raise HTTPException(status_code=404, detail="Unknown job")
     jobs: IngestJobManager | None = state.get("jobs")
     run = jobs.status(job_id) if jobs else None

@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1.7
-# Multi-stage build: frontend bundle -> Python deps + cached embedding model -> slim non-root runtime.
+# Multi-stage build.
+#   runtime (default, last stage): the non-root API image used by docker-compose.
+#   lambda  (--target lambda):     the same app behind AWS Lambda Web Adapter, with an encrypted
+#                                  demo index baked in (needs the build secret "aes_key").
 
 # --- 1. React frontend -------------------------------------------------------------------
 FROM node:20-slim AS frontend
@@ -22,28 +25,63 @@ RUN pip install -r requirements.txt
 ARG EMBED_MODEL=sentence-transformers/all-MiniLM-L6-v2
 RUN python -c "from sentence_transformers import SentenceTransformer as S; S('${EMBED_MODEL}')"
 
-# --- 3. Runtime --------------------------------------------------------------------------
-FROM python:3.11-slim AS runtime
+# --- 3. Application base (shared by runtime, lambda and the demo-index build) --------------------
+FROM python:3.11-slim AS app-base
+ENV PATH=/opt/venv/bin:$PATH \
+    HF_HOME=/opt/hf HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 USE_TF=0 ANONYMIZED_TELEMETRY=False \
+    PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
+    ENV=prod AUTH_MODE=api_key LOG_FORMAT=json
+COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /opt/hf /opt/hf
+WORKDIR /app
+COPY securerag ./securerag
+COPY app ./app
+COPY scripts ./scripts
+COPY data/sample ./data/sample
+COPY --from=frontend /fe/dist ./frontend/dist
+
+# --- 4. Encrypted demo index for Lambda (build-time ingest) ------------------------------------
+# The AES key comes from a BuildKit secret mount: it exists only while this RUN executes and is
+# never written to a layer. Only ciphertext, vectors and hashed terms leave this stage; the
+# plaintext demo corpus stays behind.
+FROM app-base AS demo-index
+ARG DEMO_SYNTHETIC_DOCS=1000
+ARG DEMO_SEED=7
+RUN python scripts/generate_corpus.py --docs ${DEMO_SYNTHETIC_DOCS} --seed ${DEMO_SEED} --out /build/corpus \
+ && cp -r data/sample/. /build/corpus/
+RUN --mount=type=secret,id=aes_key,required=true \
+    SECURERAG_AES_KEY_B64="$(cat /run/secrets/aes_key)" \
+    DATA_DIR=/build/corpus CHROMA_DIR=/opt/demo/index/chroma \
+    STATE_DB_PATH=/opt/demo/index/ingest_state.sqlite SPARSE_DIR=/opt/demo/index/sparse \
+    python scripts/ingest.py --json > /opt/demo/ingest_report.json \
+ && python -c "import json; r=json.load(open('/opt/demo/ingest_report.json')); assert r['rejected']==0 and r['failed']==0, r; print(r['chunks_written'], 'chunks')"
+
+# --- 5. AWS Lambda image (docker build --target lambda --secret id=aes_key,src=...) --------
+FROM app-base AS lambda
+# Lambda Web Adapter runs the unchanged uvicorn app as a Lambda extension.
+COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:0.8.4 /lambda-adapter /opt/extensions/lambda-adapter
+COPY --from=demo-index /opt/demo/index /opt/demo/index
+ENV AWS_LWA_PORT=8000 \
+    AWS_LWA_READINESS_CHECK_PATH=/api/health \
+    AWS_LWA_ASYNC_INIT=true \
+    LAMBDA_MODE=1 \
+    DEMO_INDEX_DIR=/opt/demo/index \
+    HOME=/tmp XDG_CACHE_HOME=/tmp/.cache MPLCONFIGDIR=/tmp/.mpl \
+    LLM_FALLBACKS=refusal RERANK_ENABLED=false
+# Lambda runs the image as an unprivileged user with a read-only filesystem apart from /tmp;
+# everything under /app, /opt stays world-readable (default modes).
+CMD ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+
+# --- 6. Runtime (default target; docker-compose) -----------------------------------------------
+FROM app-base AS runtime
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin app \
  && mkdir -p /data && chown app:app /data
-ENV PATH=/opt/venv/bin:$PATH \
-    HF_HOME=/opt/hf HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 USE_TF=0 \
-    PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
-    ENV=prod AUTH_MODE=api_key LOG_FORMAT=json \
-    DATA_DIR=/app/data/sample \
+ENV DATA_DIR=/app/data/sample \
     CHROMA_DIR=/data/chroma_db \
     STATE_DB_PATH=/data/ingest_state.sqlite \
     SPARSE_DIR=/data/sparse \
     AUDIT_LOG_PATH=/data/audit/audit.jsonl \
     API_KEYS_FILE=/data/api_keys.json
-COPY --from=builder /opt/venv /opt/venv
-COPY --from=builder /opt/hf /opt/hf
-WORKDIR /app
-COPY --chown=app:app securerag ./securerag
-COPY --chown=app:app app ./app
-COPY --chown=app:app scripts ./scripts
-COPY --chown=app:app data/sample ./data/sample
-COPY --chown=app:app --from=frontend /fe/dist ./frontend/dist
 USER app
 VOLUME ["/data"]
 EXPOSE 8000
