@@ -27,6 +27,8 @@ always-on EC2 instance.
    (actual) and $20 (forecast).
 2. **GitHub OIDC provider:** IAM → Identity providers → Add → OpenID Connect,
    URL `https://token.actions.githubusercontent.com`, audience `sts.amazonaws.com`.
+   **Windows shortcut for steps 3-4:** `powershell -ExecutionPolicy Bypass -File deployws\setup_credentials.ps1`
+   logs in to GitHub and AWS, generates the keys and stores every secret in SSM / GitHub itself.
 3. **Demo keys** (locally):
    ```bash
    python scripts/create_demo_keys.py --hashed-out data/demo_api_keys.hashed.json > data/demo_keys_plain.json
@@ -61,8 +63,9 @@ aws cloudformation describe-stacks --region ap-south-1 --stack-name securerag --
 - `ECR_REPOSITORY_URI` = `EcrRepositoryUri`
 - `LAMBDA_FUNCTION_NAME` = `FunctionName` (`securerag-api`)
 
-The function doesn't exist yet, so build and push once without the update step. Run this from a
-machine with Docker, or temporarily run only the build/push steps of the workflow:
+The function doesn't exist yet. Either run **Actions → Deploy backend (Lambda)** by hand (without a
+function it only builds and pushes the image, then prints the `ImageUri` for pass 2), or, from a
+machine with Docker:
 ```bash
 aws ssm get-parameter --region ap-south-1 --name /securerag/aes_key_b64 --with-decryption \
   --query Parameter.Value --output text > /tmp/aes_key

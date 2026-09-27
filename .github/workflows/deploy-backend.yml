@@ -72,6 +72,13 @@ jobs:
           IMAGE: ${{ vars.ECR_REPOSITORY_URI }}:${{ github.sha }}
           FUNCTION: ${{ vars.LAMBDA_FUNCTION_NAME }}
         run: |
+          # Bootstrap: before stack pass 2 the function doesn't exist yet. Pushing the image is the
+          # whole job then (no local Docker needed for the first deploy).
+          if ! aws lambda get-function --function-name "$FUNCTION" >/dev/null 2>&1; then
+            echo "::notice::function $FUNCTION not found; image pushed, now run stack pass 2 with ImageUri=$IMAGE"
+            echo "bootstrap=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           PREVIOUS=$(aws lambda get-function --function-name "$FUNCTION" --query Code.ImageUri --output text)
           echo "previous=$PREVIOUS" >> "$GITHUB_OUTPUT"
           aws lambda update-function-code --function-name "$FUNCTION" --image-uri "$IMAGE" >/dev/null
@@ -80,6 +87,7 @@ jobs:
 
       - name: Smoke test every demo role on the Function URL
         id: smoke
+        if: steps.update.outputs.bootstrap != 'true'
         env:
           SMOKE_KEYS: ${{ secrets.DEMO_KEYS_JSON }}
         run: python3 scripts/smoke_api.py --base-url "${{ vars.FUNCTION_URL }}" --wait-ready 300

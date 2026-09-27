@@ -953,3 +953,12 @@ The Amplify console steps in deploy/aws/README.md §2, and the CSP placeholder r
   the two environments disagreed.
 - Fix: `options=cast(Any, options)` instead of the ignore; passes mypy both with and without PyJWT. Verified in a
   clean venv matching the CI lint install (mypy, ruff, cfn-lint all clean) and in the full venv (184 tests).
+
+## Deploy bootstrap without local Docker + credential setup script
+- No Docker on the dev machine, so `deploy-backend.yml` gained a bootstrap mode: if the Lambda function doesn't
+  exist yet (before stack pass 2) the job stops after pushing the image and prints the ImageUri; the smoke test
+  is skipped. Once the function exists the normal update/smoke/rollback path runs.
+- `deploy/aws/setup_credentials.ps1`: run by the owner in a terminal. Logs in `gh` (workflow scope) and an AWS
+  profile `securerag`, generates a fresh AES key and the demo keys, and writes them to SSM (via temp files, never
+  the command line) and the GitHub secret DEMO_KEYS_JSON; the Groq key is read with a hidden prompt. Secrets never
+  pass through the assistant.
