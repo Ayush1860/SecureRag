@@ -98,10 +98,27 @@ Resources:
         must:
           - Keep at least 2 images, because the deploy workflow rolls back to the previous tag.
           - Tags are immutable git SHAs; the workflow never overwrites a tag.
+          - The repository policy lets the Lambda service pull images for this one function only.
+            Without it, UpdateFunctionCode by the least-privilege deploy role fails with "Lambda does
+            not have permission to access the ECR image" (Lambda would otherwise need the caller to
+            hold ecr:SetRepositoryPolicy to add this itself).
     Properties:
       RepositoryName: !Sub ${AWS::StackName}-api
       ImageTagMutability: IMMUTABLE
       EmptyOnDelete: true
+      RepositoryPolicyText:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: LambdaImagePull
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: [ecr:BatchGetImage, ecr:GetDownloadUrlForLayer]
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              StringLike:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-api*
       ImageScanningConfiguration:
         ScanOnPush: true
       EncryptionConfiguration:

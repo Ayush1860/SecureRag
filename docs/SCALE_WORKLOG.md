@@ -1043,3 +1043,12 @@ Common cause: the image pipeline had never run end to end (no Docker locally, do
 - check_groq.ps1 result: the key's org has no llama-3.x models (`model_not_found`); available chat models include
   openai/gpt-oss-20b / -120b and qwen. Default switched to `openai/gpt-oss-20b` (router + template `GroqModel`).
   No max_tokens cap in the router, so gpt-oss's reasoning tokens can't starve the answer.
+
+## Fix — deploy role couldn't update the function image (run 36349211946)
+- UpdateFunctionCode by the deploy role: "Lambda does not have permission to access the ECR image". The repo had
+  no repository policy; the function was created by an admin whose own ECR rights covered it. The live function
+  was unchanged (still 90d79ac).
+- Template: ECR `RepositoryPolicyText` lets `lambda.amazonaws.com` BatchGetImage/GetDownloadUrlForLayer, limited
+  by aws:SourceAccount and aws:SourceArn = this function. Test added.
+- The rollback step ran after the *update* failed and printed "smoke test failed", which was misleading; it now
+  runs only when the smoke step itself failed.

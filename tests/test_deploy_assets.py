@@ -79,3 +79,13 @@ def test_only_auth_token_actions_use_wildcard_resource(template):
                 assert not any(a.endswith(":*") or a == "*" for a in actions)
     assert wildcard_actions == ["ecr:GetAuthorizationToken",
                                 ["ecr-public:GetAuthorizationToken", "sts:GetServiceBearerToken"]]
+
+
+def test_ecr_policy_lets_only_this_function_pull(template):
+    stmts = template["Resources"]["Repository"]["Properties"]["RepositoryPolicyText"]["Statement"]
+    assert len(stmts) == 1
+    stmt = stmts[0]
+    assert stmt["Principal"] == {"Service": "lambda.amazonaws.com"}
+    assert sorted(stmt["Action"]) == ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
+    assert "function:${AWS::StackName}-api" in json.dumps(stmt["Condition"]["StringLike"]["aws:SourceArn"])
+    assert stmt["Condition"]["StringEquals"]["aws:SourceAccount"] == {"Ref": "AWS::AccountId"}

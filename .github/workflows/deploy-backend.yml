@@ -111,7 +111,7 @@ jobs:
         run: python3 scripts/smoke_api.py --base-url "${{ vars.FUNCTION_URL }}" --wait-ready 300
 
       - name: Roll back on failed smoke test
-        if: failure() && steps.update.outputs.previous != ''
+        if: failure() && steps.smoke.outcome == 'failure' && steps.update.outputs.previous != ''
         env:
           FUNCTION: ${{ vars.LAMBDA_FUNCTION_NAME }}
           PREVIOUS: ${{ steps.update.outputs.previous }}
