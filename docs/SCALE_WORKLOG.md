@@ -1052,3 +1052,11 @@ Common cause: the image pipeline had never run end to end (no Docker locally, do
   by aws:SourceAccount and aws:SourceArn = this function. Test added.
 - The rollback step ran after the *update* failed and printed "smoke test failed", which was misleading; it now
   runs only when the smoke step itself failed.
+
+## Live and verified (2026-09-28)
+- Stack update (repo policy + GroqModel=openai/gpt-oss-20b), then deploy run 36350183330: first fully green
+  pipeline run (build, update to f9d9209, smoke test of every demo role). Re-run of smoke_api.py afterwards:
+  0 problems.
+- Live answers (~1-2 s warm): employee gets general/engineering/hr at public/internal only; guest gets
+  general/public only and says it lacks the confidential figures; exec gets the confidential finance memo.
+- https://ayush1860.github.io/SecureRag/ serves the fixed bundle: "System Online (3168 chunks)", no console errors.
