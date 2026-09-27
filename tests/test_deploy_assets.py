@@ -45,7 +45,9 @@ def template():
 
 def test_template_cost_and_abuse_caps(template):
     fn = template["Resources"]["Function"]["Properties"]
-    assert fn["ReservedConcurrentExecutions"] <= 2
+    params = template["Parameters"]["ReservedConcurrency"]
+    assert params["Default"] == 2 and params["MaxValue"] <= 2  # cap can never be raised past 2
+    assert fn["ReservedConcurrentExecutions"]["If"][1] == {"Ref": "ReservedConcurrency"}
     assert fn["EphemeralStorage"]["Size"] == 1024 and fn["Timeout"] == 60
     assert template["Resources"]["LogGroup"]["Properties"]["RetentionInDays"] == 7
     lifecycle = json.loads(template["Resources"]["Repository"]["Properties"]["LifecyclePolicy"]["LifecyclePolicyText"])

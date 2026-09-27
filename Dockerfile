@@ -33,6 +33,11 @@ ENV PATH=/opt/venv/bin:$PATH \
     ENV=prod AUTH_MODE=api_key LOG_FORMAT=json
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /opt/hf /opt/hf
+# Plain-directory alias of the baked model. The Lambda image (read-only filesystem) and the demo index
+# it ships load the model from this path, so no Hugging Face cache lookups or cache writes happen.
+RUN mkdir -p /opt/models \
+ && ln -s "$(ls -d /opt/hf/hub/models--sentence-transformers--all-MiniLM-L6-v2/snapshots/*)" /opt/models/embed \
+ && test -f /opt/models/embed/modules.json
 WORKDIR /app
 COPY securerag ./securerag
 COPY app ./app
@@ -45,6 +50,7 @@ COPY --from=frontend /fe/dist ./frontend/dist
 # never written to a layer. Only ciphertext, vectors and hashed terms leave this stage; the
 # plaintext demo corpus stays behind.
 FROM app-base AS demo-index
+ENV EMBED_MODEL=/opt/models/embed
 ARG DEMO_SYNTHETIC_DOCS=1000
 ARG DEMO_SEED=7
 RUN python scripts/generate_corpus.py --docs ${DEMO_SYNTHETIC_DOCS} --seed ${DEMO_SEED} --out /build/corpus \
@@ -67,6 +73,7 @@ ENV AWS_LWA_PORT=8000 \
     AWS_LWA_ASYNC_INIT=true \
     LAMBDA_MODE=1 \
     DEMO_INDEX_DIR=/opt/demo/index \
+    EMBED_MODEL=/opt/models/embed \
     HOME=/tmp XDG_CACHE_HOME=/tmp/.cache MPLCONFIGDIR=/tmp/.mpl \
     LLM_FALLBACKS=refusal RERANK_ENABLED=false
 # Lambda runs the image as an unprivileged user with a read-only filesystem apart from /tmp;

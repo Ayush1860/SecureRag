@@ -988,3 +988,25 @@ The Amplify console steps in deploy/aws/README.md §2, and the CSP placeholder r
   (ENV=prod, AUTH_MODE=api_key, 1000 synthetic docs seed 7 + data/sample, fresh AES key): 1005 files ->
   3168 chunks, 0 rejected, 0 failed, the same assertion the Dockerfile runs. (No Docker here, so the image itself
   is still first built on Actions.)
+
+## Root-cause review after four failed deploy runs (2026-09-27)
+| Run | Failed at | Cause |
+|---|---|---|
+| 36334297285 | OIDC AssumeRole | repo uses GitHub's immutable `sub`; trust only had owner/repo (fixed bc0f01b) |
+| 36335911410 | FROM public.ecr.aws LWA | anonymous 429 data limit (fixed ac898c4) |
+| 36336395593 | demo-index RUN | /opt/demo missing (fixed 2daf3f6) |
+| 36336984026 | docker push | duplicate build: the push had already started a run (36336931532, **succeeded**, image 2daf3f6 in ECR); the script saw no image yet and dispatched a second run, which hit the immutable tag |
+
+Common cause: the image pipeline had never run end to end (no Docker locally, docker-bench never run), so each
+~15 min attempt exposed the next layer. Hardening done in one go instead of one fix per run:
+- Workflow skips build/push when ECR already has the commit's tag (idempotent re-runs).
+- first_deploy.ps1 waits for a run already started by the push, reuses an image whose build inputs are
+  unchanged, and only dispatches when neither exists.
+- Pre-empted the next likely failure: new accounts with a concurrency limit of 10 can't reserve any
+  (`ReservedConcurrentExecutions` would fail stack pass 2). New parameter `ReservedConcurrency` (0-2, default 2,
+  0 = unset); the script reads the account limit and passes 0 below 12.
+- Lambda loads the embedding model from a plain directory (`/opt/models/embed` -> baked HF snapshot) in the
+  demo-index and lambda stages, so no HF hub/cache code runs on Lambda's read-only filesystem. The embeddings are
+  identical to loading by hub id (checked locally). The runtime (compose) image keeps the hub id so existing
+  volumes' store identity doesn't change.
+- Checked the execution role against the cold-start calls (ssm:GetParameters + kms:Decrypt via SSM): matches.

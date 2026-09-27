@@ -54,6 +54,14 @@ Parameters:
     Type: String
     Default: main
     AllowedPattern: ^[A-Za-z0-9_./-]+$
+  ReservedConcurrency:
+    Type: Number
+    Default: 2
+    MinValue: 0
+    MaxValue: 2
+    Description: >-
+      Reserved concurrency cap (cost/abuse). 0 = don't reserve: new accounts with a total limit of
+      10 can't reserve any (AWS keeps 10 unreserved); the account limit then caps it instead.
   AesKeyParam:
     Type: String
     Default: /securerag/aes_key_b64
@@ -69,6 +77,7 @@ Parameters:
 
 Conditions:
   HasImage: !Not [!Equals [!Ref ImageUri, ""]]
+  ReserveConcurrency: !Not [!Equals [!Ref ReservedConcurrency, 0]]
 
 Resources:
   Repository:
@@ -167,7 +176,8 @@ Resources:
         why: >-
           FastAPI via Lambda Web Adapter. 3008 MB gives ~2 vCPU for torch. Timeout 60 s covers the
           first request after a ~20 s cold start. /tmp at 1024 MB holds the copied demo index.
-          Reserved concurrency 2 caps cost and abuse; Lambda's always-free tier covers demo traffic.
+          Reserved concurrency 2 caps cost and abuse (0 on accounts limited to 10, where the account
+          limit caps it); Lambda's always-free tier covers demo traffic.
         must:
           - ReservedConcurrentExecutions stays small (cost/abuse cap). Never add provisioned
             concurrency.
@@ -185,7 +195,7 @@ Resources:
       Timeout: 60
       EphemeralStorage:
         Size: 1024
-      ReservedConcurrentExecutions: 2
+      ReservedConcurrentExecutions: !If [ReserveConcurrency, !Ref ReservedConcurrency, !Ref AWS::NoValue]
       Role: !GetAtt ExecutionRole.Arn
       LoggingConfig:
         LogGroup: !Ref LogGroup

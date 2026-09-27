@@ -9,7 +9,7 @@
 #   3. GitHub OIDC identity provider in IAM                                          ($0)
 #   4. stack pass 1: ECR repo, log group, IAM roles                                  ($0)
 #   5. GitHub repo variables for the deploy workflow
-#   6. deploy workflow on GitHub Actions builds + pushes the image (bootstrap mode)  (~$0.02/month ECR)
+#   6. image: waits for the build the push started (or starts one), reuses existing images
 #   7. stack pass 2: Lambda function + Function URL                                  (free tier)
 #   8. FUNCTION_URL variable + smoke test of every demo role
 # Never enables WAF, provisioned concurrency, NAT or EC2.
@@ -107,33 +107,66 @@ gh variable set ECR_REPOSITORY_URI  --repo $Repo --body $EcrUri
 gh variable set LAMBDA_FUNCTION_NAME --repo $Repo --body $FnName
 if ($LASTEXITCODE -ne 0) { Fail 'gh variable set failed' }
 
-# --- 6. image build on GitHub Actions --------------------------------------------------------------
-Step "Image $EcrUri`:$Sha"
-$null = aws ecr describe-images --repository-name ($EcrUri.Split('/')[-1]) --image-ids imageTag=$Sha 2>$null
-if ($LASTEXITCODE -eq 0) {
-    Write-Host '  already in ECR'
-} else {
-    $before = gh run list --repo $Repo --workflow deploy-backend.yml --limit 1 --json databaseId -q '.[0].databaseId'
-    gh workflow run deploy-backend.yml --repo $Repo --ref main
-    if ($LASTEXITCODE -ne 0) { Fail 'could not start the deploy workflow' }
-    Write-Host '  started the workflow; waiting for it to appear...'
-    $runId = $before
-    for ($i = 0; $i -lt 30 -and $runId -eq $before; $i++) {
-        Start-Sleep -Seconds 4
-        $runId = gh run list --repo $Repo --workflow deploy-backend.yml --limit 1 --json databaseId -q '.[0].databaseId'
-    }
-    if ($runId -eq $before) { Fail 'the workflow run did not appear; check the Actions tab' }
-    Write-Host "  https://github.com/$Repo/actions/runs/$runId (build takes ~15-25 min)"
-    gh run watch $runId --repo $Repo --exit-status --interval 30
-    if ($LASTEXITCODE -ne 0) { Fail "workflow run $runId failed; open the link above" }
+# --- 6. image (built on GitHub Actions) ------------------------------------------------------------
+# A push that touches the image inputs starts deploy-backend.yml by itself, so wait for that run
+# instead of starting a second build of the same commit (ECR tags are immutable).
+Step 'Container image'
+$EcrRepoName = $EcrUri.Split('/')[-1]
+function ImageExists($tag) {
+    $null = aws ecr describe-images --repository-name $EcrRepoName --image-ids imageTag=$tag 2>$null
+    return ($LASTEXITCODE -eq 0)
 }
-$Image = "$EcrUri`:$Sha"
+function WatchRun($runId) {
+    Write-Host "  https://github.com/$Repo/actions/runs/$runId (a full build takes ~10-25 min)"
+    gh run watch $runId --repo $Repo --exit-status --interval 30
+    return ($LASTEXITCODE -eq 0)
+}
+# The image depends only on these paths; commits that touch nothing else reuse the older image.
+$BuildSha = (git log -1 --format=%H -- securerag app scripts data/sample frontend Dockerfile requirements.txt).Trim()
+$Tag = $null
+if (ImageExists $Sha) { $Tag = $Sha }
+elseif (ImageExists $BuildSha) { $Tag = $BuildSha }
+else {
+    Write-Host '  no image for this code yet; looking for a deploy run already started by the push...'
+    $runId = $null
+    for ($i = 0; $i -lt 12 -and -not $runId; $i++) {
+        $runId = gh run list --repo $Repo --workflow deploy-backend.yml --commit $Sha --limit 1 --json databaseId -q '.[0].databaseId'
+        if (-not $runId) { Start-Sleep -Seconds 5 }
+    }
+    if ($runId) {
+        Write-Host "  found run $runId for $Sha"
+        $ok = WatchRun $runId
+        if ((-not $ok) -and -not (ImageExists $Sha)) { Fail "workflow run $runId failed; open the link above" }
+    } else {
+        gh workflow run deploy-backend.yml --repo $Repo --ref main
+        if ($LASTEXITCODE -ne 0) { Fail 'could not start the deploy workflow' }
+        for ($i = 0; $i -lt 30 -and -not $runId; $i++) {
+            Start-Sleep -Seconds 4
+            $runId = gh run list --repo $Repo --workflow deploy-backend.yml --commit $Sha --event workflow_dispatch --limit 1 --json databaseId -q '.[0].databaseId'
+        }
+        if (-not $runId) { Fail 'the workflow run did not appear; check the Actions tab' }
+        if (-not (WatchRun $runId)) { Fail "workflow run $runId failed; open the link above" }
+    }
+    if (-not (ImageExists $Sha)) { Fail "run finished but ECR has no image tagged $Sha" }
+    $Tag = $Sha
+}
+$Image = "$EcrUri`:$Tag"
+Write-Host "  using $Image"
+
+# Reserved concurrency: AWS keeps 10 executions unreserved, so accounts whose total limit is 10
+# (common for new accounts) can't reserve any. Use 0 (= none) there; the account limit caps it.
+$Limit = [int](aws lambda get-account-settings --query AccountLimit.ConcurrentExecutions --output text)
+$Reserve = 2
+if ($Limit -lt 12) {
+    $Reserve = 0
+    Write-Host "  account concurrency limit is $Limit, so no reserved concurrency (the limit itself caps cost)" -ForegroundColor Yellow
+}
 
 # --- 7. stack pass 2 -------------------------------------------------------------------------------
 Step 'Stack pass 2 (Lambda function + Function URL)'
 aws cloudformation deploy --stack-name $Stack --template-file deploy/aws/backend.yaml `
     --capabilities CAPABILITY_IAM --tags project=securerag --no-fail-on-empty-changeset `
-    --parameter-overrides "ImageUri=$Image"
+    --parameter-overrides "ImageUri=$Image" "ReservedConcurrency=$Reserve"
 if ($LASTEXITCODE -ne 0) { Fail 'stack pass 2 failed (see the Events tab of the stack in the console)' }
 $FnUrl = (StackOutput 'FunctionUrl').TrimEnd('/')
 Write-Host "  Function URL: $FnUrl"

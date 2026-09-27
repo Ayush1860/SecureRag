@@ -54,9 +54,21 @@ jobs:
       # and fail with 429 "Data limit exceeded"; authenticated pulls have their own, higher limit.
       - name: Log in to public.ecr.aws (ECR Public auth lives in us-east-1)
         run: |
-          aws ecr-public get-login-password --region us-east-1             | docker login --username AWS --password-stdin public.ecr.aws
+          aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
+
+      # ECR tags are immutable, so a second run for the same commit (push + manual dispatch) reuses
+      # the image instead of failing on "tag already exists".
+      - name: Check for an existing image of this commit
+        id: existing
+        run: |
+          if aws ecr describe-images --repository-name "${ECR_URI##*/}" --image-ids imageTag="$GITHUB_SHA" >/dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"; echo "image for $GITHUB_SHA already in ECR; skipping build"
+          fi
+        env:
+          ECR_URI: ${{ vars.ECR_REPOSITORY_URI }}
 
       - name: Build lambda image (AES key as a BuildKit secret, never in a layer)
+        if: steps.existing.outputs.found != 'true'
         env:
           IMAGE: ${{ vars.ECR_REPOSITORY_URI }}:${{ github.sha }}
         run: |
