@@ -45,7 +45,9 @@ export default function App() {
   const [currentRole, setCurrentRole] = useState('employee');
   // Authentication: in AUTH_MODE=dev the role picker sets X-Dev-Role; otherwise the role comes
   // from the API key / JWT and the picker is locked to it.
-  const [authMode, setAuthMode] = useState('dev');
+  // null until /api/auth/mode answers, so no X-Dev-Role header goes to a backend that isn't in dev
+  // mode (the deployed API's CORS rejects that header, which would fail the whole request).
+  const [authMode, setAuthMode] = useState(null);
   const [credential, setCredential] = useState(readCredential);
   const [principal, setPrincipal] = useState(null);
   const [authError, setAuthError] = useState(null);
@@ -75,7 +77,7 @@ export default function App() {
 
   const authHeaders = (cred = credential, role = currentRole) => {
     if (authMode === 'dev') return { 'X-Dev-Role': role };
-    if (!cred) return {};
+    if (!authMode || !cred) return {};
     return authMode === 'jwt' ? { Authorization: `Bearer ${cred}` } : { 'X-API-Key': cred };
   };
 
@@ -90,6 +92,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!authMode) return;
     if (authMode !== 'dev' && credential) signIn(credential);
     if (authMode === 'dev') fetchAuditTrail();
     // eslint-disable-next-line react-hooks/exhaustive-deps

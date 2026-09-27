@@ -159,8 +159,10 @@ class LLMRouter:
             except ProviderUnavailable as exc:
                 logger.info("LLM provider %s unavailable: %s", provider, exc)
             except (RetryError, Exception) as exc:  # noqa: BLE001 - try the next provider
-                logger.warning("LLM provider %s failed after %d attempt(s): %s", provider, attempts,
-                               type(exc).__name__)
+                # The provider's own message (e.g. "model ... does not exist") makes 4xx failures
+                # diagnosable from the logs; it carries no prompt text or credentials. Capped length.
+                logger.warning("LLM provider %s failed after %d attempt(s): %s: %s", provider, attempts,
+                               type(exc).__name__, str(exc)[:300])
             failed.append(provider)
         # Nothing in the chain answered (no "refusal" configured): refuse rather than raise.
         return LLMResult(text=REFUSAL_TEXT, provider="refusal", attempts=0, fallbacks=failed)

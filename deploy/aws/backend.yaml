@@ -24,7 +24,7 @@ Metadata:
       - Label: {default: Access}
         Parameters: [AmplifyOrigin, GitHubRepo, GitHubRepoIds, GitHubBranch]
       - Label: {default: "Secrets (SSM parameter names, not values)"}
-        Parameters: [AesKeyParam, ApiKeysParam, GroqKeyParam]
+        Parameters: [AesKeyParam, ApiKeysParam, GroqKeyParam, GroqModel]
 
 Parameters:
   ImageUri:
@@ -74,6 +74,11 @@ Parameters:
     Type: String
     Default: /securerag/groq_api_key
     AllowedPattern: ^/securerag/.+$
+  GroqModel:
+    Type: String
+    Default: llama-3.1-8b-instant
+    AllowedPattern: ^[A-Za-z0-9._/-]+$
+    Description: Groq model id (console.groq.com/docs/models). Change it here when Groq retires a model.
 
 Conditions:
   HasImage: !Not [!Equals [!Ref ImageUri, ""]]
@@ -206,6 +211,7 @@ Resources:
           SSM_API_KEYS_PARAM: !Ref ApiKeysParam
           SSM_GROQ_KEY_PARAM: !Ref GroqKeyParam
           LLM_PROVIDER: groq
+          GROQ_MODEL: !Ref GroqModel
           LLM_FALLBACKS: refusal
           RATE_LIMIT: 20/minute
           LOG_LEVEL: INFO

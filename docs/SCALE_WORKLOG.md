@@ -1029,3 +1029,14 @@ Common cause: the image pipeline had never run end to end (no Docker locally, do
   Function URL left the page and was refused only by backend CORS (expected from a localhost origin).
 - Backend CORS needs `AmplifyOrigin=https://ayush1860.github.io` (owner runs the stack update).
 - SECURITY.md notes the Pages limitation (no frame-ancestors / X-Frame-Options; low impact, no session).
+
+## Live site check (2026-09-28) — two issues found
+- https://ayush1860.github.io/SecureRag/ loads, shows "System Online (3168 chunks)": CSP, CORS and cold start
+  work end to end. Live smoke test (guest/employee/exec, 5 queries each): 0 problems.
+- Bug 1 (frontend): authMode started as 'dev', so the first audit fetch carried X-Dev-Role, which the Lambda's
+  CORS (correctly) doesn't allow -> preflight failed. authMode now starts null and nothing auth-related is sent
+  until /api/auth/mode answers.
+- Bug 2 (LLM): every answer was the refusal fallback. CloudWatch: Groq returned 404 NotFoundError for
+  llama-3.1-8b-instant (key accepted; model not found or not enabled for the org). The router now logs the
+  provider's message (capped at 300 chars; no prompt text or secrets), the model is a stack parameter
+  (`GroqModel` -> GROQ_MODEL), and `deploy/aws/check_groq.ps1` lists the models the stored key can use.
