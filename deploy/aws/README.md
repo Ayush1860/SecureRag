@@ -94,7 +94,21 @@ SMOKE_KEYS="$(cat data/demo_keys_plain.json)" python scripts/smoke_api.py --base
 ```
 The first call triggers a cold start of about 20 s. Look for `INIT_REPORT` in the log group.
 
-## 2. Frontend on Amplify (console, ~$0)
+## 2. Frontend
+
+### 2a. GitHub Pages (what the live demo uses, $0)
+Used because Amplify refused a new app (per-region app limit on this account).
+1. Repo **Settings → Pages → Source: GitHub Actions**.
+2. `.github/workflows/pages.yml` builds `frontend/` with `VITE_API_BASE` = the `FUNCTION_URL` variable and
+   publishes `https://<owner>.github.io/<repo>/`. Optional: repo variable `PAGES_SHOW_DEMO_KEYS=true` to show
+   the demo keys (secret `DEMO_KEYS_JSON`) in the About panel.
+3. Allow that origin on the backend (the parameter is still called `AmplifyOrigin`):
+   ```bash
+   aws cloudformation deploy --region ap-south-1 --stack-name securerag \n     --template-file deploy/aws/backend.yaml --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset \n     --parameter-overrides AmplifyOrigin=https://<owner>.github.io
+   ```
+Pages can't send response headers, so the CSP ships as a `<meta>` tag (see SECURITY.md, "Frontend headers").
+
+### 2b. Amplify Hosting (alternative, console, ~$0)
 
 1. Amplify → **Host web app** → GitHub → repo `Ayush1860/SecureRag`, branch `main`. Amplify reads
    `amplify.yml` from the repo root (app root `frontend`).

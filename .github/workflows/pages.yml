@@ -1,0 +1,59 @@
+name: Frontend (GitHub Pages)
+
+# Builds the React frontend against the Lambda Function URL and publishes it to
+# https://<owner>.github.io/<repo>/. Free; replaces Amplify Hosting for this demo.
+#
+# One-time setup: Settings -> Pages -> Source: "GitHub Actions". Uses the repo variable FUNCTION_URL
+# (set by deploy/aws/first_deploy.ps1). Set the variable PAGES_SHOW_DEMO_KEYS=true to show the demo
+# keys (secret DEMO_KEYS_JSON) in the "About this demo" panel (see SECURITY.md, "Public demo credentials").
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/pages.yml"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    if: ${{ vars.FUNCTION_URL != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: frontend
+      - name: Build
+        working-directory: frontend
+        env:
+          VITE_API_BASE: ${{ vars.FUNCTION_URL }}
+          VITE_BASE_PATH: /${{ github.event.repository.name }}/
+          CSP_CONNECT_SRC: ${{ vars.FUNCTION_URL }}
+          VITE_DEMO_KEYS_JSON: ${{ vars.PAGES_SHOW_DEMO_KEYS == 'true' && secrets.DEMO_KEYS_JSON || '' }}
+        run: npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

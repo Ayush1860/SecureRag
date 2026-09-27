@@ -1017,3 +1017,15 @@ Common cause: the image pipeline had never run end to end (no Docker locally, do
 - Checked from outside: `GET /api/health` -> 200 `{"chunks": 3168, ...}` in 10.8 s (cold start);
   `POST /api/query` without a key -> 401.
 - amplify.yml CSP `connect-src` now holds the Function URL origin (placeholder removed).
+
+## Frontend on GitHub Pages instead of Amplify (2026-09-28)
+- Amplify "Create app" failed: "You have reached the maximum number of apps in this account" (the account's
+  ap-south-1 app limit is taken by another project). The owner chose GitHub Pages.
+- `.github/workflows/pages.yml`: builds frontend/ with VITE_API_BASE = vars.FUNCTION_URL, base path /<repo>/,
+  deploys with actions/deploy-pages. Demo keys only when vars.PAGES_SHOW_DEMO_KEYS == 'true'.
+- `frontend/vite.config.js`: `base` from VITE_BASE_PATH; when CSP_CONNECT_SRC is set, a build-only plugin
+  injects the amplify.yml CSP (minus frame-ancestors, which <meta> ignores) and a referrer policy.
+- Checked locally: Pages-style build served under /SecureRag/ renders; no CSP violations; the request to the
+  Function URL left the page and was refused only by backend CORS (expected from a localhost origin).
+- Backend CORS needs `AmplifyOrigin=https://ayush1860.github.io` (owner runs the stack update).
+- SECURITY.md notes the Pages limitation (no frame-ancestors / X-Frame-Options; low impact, no session).

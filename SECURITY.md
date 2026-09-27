@@ -95,6 +95,12 @@ Never publish keys for a deployment that serves real documents.
 
 `style-src` allows `'unsafe-inline'` because React style attributes need it. Scripts do not.
 
+**GitHub Pages (the live demo).** Pages can't set response headers, so the Pages build
+(`CSP_CONNECT_SRC` in `frontend/vite.config.js`) injects the same CSP as a `<meta http-equiv>` tag plus a
+referrer policy. A `<meta>` CSP can't express `frame-ancestors`, and Pages sends no `X-Frame-Options`, so the
+page itself can be framed (clickjacking). The impact is low: there is no login session to hijack; the API key is
+typed into the page and sent as a header. GitHub Pages serves HTTPS with HSTS on github.io.
+
 ## Known limitations (summary)
 
 - Embedding inversion (T5): the vectors aren't encrypted, so similarity search keeps working.
