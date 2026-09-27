@@ -945,3 +945,11 @@ Run README §0-§2 in order. Nothing has been created in AWS.
 
 ### Needs you
 The Amplify console steps in deploy/aws/README.md §2, and the CSP placeholder replacement.
+
+## CI fix — lint job mypy failure (run 36153119442 on daec6a5)
+- Cause: the lint job installs only ruff/mypy/pydantic, so PyJWT is missing and mypy (ignore_missing_imports)
+  sees `jwt.decode` as untyped. The `# type: ignore[arg-type]` on `securerag/security/auth.py` then became an
+  unused ignore, which `warn_unused_ignores` turns into an error. Locally (PyJWT installed) it was needed, so
+  the two environments disagreed.
+- Fix: `options=cast(Any, options)` instead of the ignore; passes mypy both with and without PyJWT. Verified in a
+  clean venv matching the CI lint install (mypy, ruff, cfn-lint all clean) and in the full venv (184 tests).

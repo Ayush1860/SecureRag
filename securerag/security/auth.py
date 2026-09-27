@@ -18,7 +18,7 @@ import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from securerag.security.rbac import ROLE_POLICY
 
@@ -133,7 +133,7 @@ class Authenticator:
             kwargs["issuer"] = self.settings.jwt_issuer
             options["require"].append("iss")
         try:
-            claims = jwt.decode(token, self._jwt_key, algorithms=[self._jwt_alg], options=options,  # type: ignore[arg-type]
+            claims = jwt.decode(token, self._jwt_key, algorithms=[self._jwt_alg], options=cast(Any, options),
                                 leeway=self.settings.jwt_leeway_seconds, **kwargs)
         except jwt.ExpiredSignatureError as exc:
             raise AuthError("token expired") from exc
