@@ -104,7 +104,9 @@ Used because Amplify refused a new app (per-region app limit on this account).
    the demo keys (secret `DEMO_KEYS_JSON`) in the About panel.
 3. Allow that origin on the backend (the parameter is still called `AmplifyOrigin`):
    ```bash
-   aws cloudformation deploy --region ap-south-1 --stack-name securerag \n     --template-file deploy/aws/backend.yaml --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset \n     --parameter-overrides AmplifyOrigin=https://<owner>.github.io
+   aws cloudformation deploy --region ap-south-1 --stack-name securerag \
+     --template-file deploy/aws/backend.yaml --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset \
+     --parameter-overrides AmplifyOrigin=https://<owner>.github.io
    ```
 Pages can't send response headers, so the CSP ships as a `<meta>` tag (see SECURITY.md, "Frontend headers").
 
