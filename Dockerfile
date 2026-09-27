@@ -49,6 +49,7 @@ ARG DEMO_SYNTHETIC_DOCS=1000
 ARG DEMO_SEED=7
 RUN python scripts/generate_corpus.py --docs ${DEMO_SYNTHETIC_DOCS} --seed ${DEMO_SEED} --out /build/corpus \
  && cp -r data/sample/. /build/corpus/
+RUN mkdir -p /opt/demo/index
 RUN --mount=type=secret,id=aes_key,required=true \
     SECURERAG_AES_KEY_B64="$(cat /run/secrets/aes_key)" \
     DATA_DIR=/build/corpus CHROMA_DIR=/opt/demo/index/chroma \

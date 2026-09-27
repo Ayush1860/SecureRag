@@ -980,3 +980,11 @@ The Amplify console steps in deploy/aws/README.md §2, and the CSP placeholder r
   The deploy role gains `ecr-public:GetAuthorizationToken` + `sts:GetServiceBearerToken` on "*" (auth-token
   actions, no resource scoping); the wildcard test was updated to allow exactly these. docker-bench.yml has no
   AWS credentials and still pulls anonymously; re-run it if it hits the same 429.
+
+## Fix — demo-index stage: missing /opt/demo (run 36336395593)
+- Public ECR login fixed the 429. The build then failed in the demo-index stage: the shell redirect
+  `> /opt/demo/ingest_report.json` ran before anything had created /opt/demo ("Directory nonexistent", exit 2).
+- Added `RUN mkdir -p /opt/demo/index` before the ingest. Replayed the stage locally with the image's settings
+  (ENV=prod, AUTH_MODE=api_key, 1000 synthetic docs seed 7 + data/sample, fresh AES key): 1005 files ->
+  3168 chunks, 0 rejected, 0 failed, the same assertion the Dockerfile runs. (No Docker here, so the image itself
+  is still first built on Actions.)
