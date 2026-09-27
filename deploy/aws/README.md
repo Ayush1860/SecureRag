@@ -109,8 +109,8 @@ The first call triggers a cold start of about 20 s. Look for `INIT_REPORT` in th
    |---|---|---|
    | `</^[^.]+$\|\.(?!(css\|gif\|ico\|jpg\|js\|png\|txt\|svg\|woff\|woff2\|ttf\|map\|json\|webp)$)([^.]+$)/>` | `/index.html` | 200 (Rewrite) |
 
-4. In `amplify.yml`, replace `FUNCTION_URL_PLACEHOLDER` in the CSP `connect-src` with your
-   Function URL origin, commit, and let Amplify redeploy.
+4. `amplify.yml`'s CSP `connect-src` must hold your Function URL origin. It is set for the current
+   stack; if you recreate the stack (new URL), update it, commit, and let Amplify redeploy.
 5. Put the Amplify domain (e.g. `https://main.d123abc.amplifyapp.com`) into the backend's CORS:
    ```bash
    aws cloudformation deploy --region ap-south-1 --stack-name securerag \

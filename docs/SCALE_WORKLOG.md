@@ -1010,3 +1010,10 @@ Common cause: the image pipeline had never run end to end (no Docker locally, do
   identical to loading by hub id (checked locally). The runtime (compose) image keeps the hub id so existing
   volumes' store identity doesn't change.
 - Checked the execution role against the cold-start calls (ssm:GetParameters + kms:Decrypt via SSM): matches.
+
+## Backend live (2026-09-28)
+- first_deploy.ps1 completed: push-triggered run 36345928482 built and pushed image 90d79ac (bootstrap mode),
+  stack pass 2 created the function, the script's smoke test passed for every demo role.
+- Checked from outside: `GET /api/health` -> 200 `{"chunks": 3168, ...}` in 10.8 s (cold start);
+  `POST /api/query` without a key -> 401.
+- amplify.yml CSP `connect-src` now holds the Function URL origin (placeholder removed).

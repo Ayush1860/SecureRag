@@ -2,8 +2,8 @@
 # In the Amplify console set AMPLIFY_MONOREPO_APP_ROOT=frontend and VITE_API_BASE=<Function URL>
 # (optionally VITE_DEMO_KEYS_JSON). See deploy/aws/README.md.
 #
-# BEFORE THE FIRST DEPLOY: replace FUNCTION_URL_PLACEHOLDER in the CSP below with your Function URL
-# origin (e.g. https://abc123.lambda-url.ap-south-1.on.aws). Until then the browser blocks API calls.
+# connect-src below holds the Function URL origin (output FunctionUrl). Update it if the stack is
+# recreated, or the browser blocks API calls.
 version: 1
 applications:
   - appRoot: frontend
@@ -30,7 +30,7 @@ applications:
             value: >-
               default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
               font-src 'self' https://fonts.gstatic.com; img-src 'self' data:;
-              connect-src 'self' FUNCTION_URL_PLACEHOLDER;
+              connect-src 'self' https://5wo55beg3spr2rtteoenbeqw3a0tvron.lambda-url.ap-south-1.on.aws;
               frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'
           - key: X-Content-Type-Options
             value: nosniff
