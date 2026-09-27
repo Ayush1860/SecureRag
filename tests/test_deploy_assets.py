@@ -60,7 +60,8 @@ def test_template_has_no_secret_values_and_scoped_trust(template):
     trust = template["Resources"]["DeployRole"]["Properties"]["AssumeRolePolicyDocument"]["Statement"][0]
     cond = trust["Condition"]["StringEquals"]
     assert cond["token.actions.githubusercontent.com:aud"] == "sts.amazonaws.com"
-    assert "ref:refs/heads/" in json.dumps(cond["token.actions.githubusercontent.com:sub"])
+    subs = cond["token.actions.githubusercontent.com:sub"]
+    assert len(subs) == 2 and all("ref:refs/heads/" in json.dumps(s) and "*" not in json.dumps(s) for s in subs)
     url_cors = template["Resources"]["FunctionUrl"]["Properties"]["Cors"]
     assert "*" not in json.dumps(url_cors["AllowOrigins"])
 

@@ -966,3 +966,9 @@ The Amplify console steps in deploy/aws/README.md §2, and the CSP placeholder r
   OIDC provider, stack pass 1, GitHub variables, image build via the workflow's bootstrap mode, stack pass 2,
   FUNCTION_URL, smoke test). Idempotent. Written as a script because the assistant does not run AWS or push
   commands itself in this setup.
+
+## Fix — deploy role OIDC trust (run 36334297285 failed at AssumeRoleWithWebIdentity)
+- The repo uses GitHub's immutable OIDC subject (`use_immutable_subject: true`), so the token's `sub` is
+  `repo:Ayush1860@89765953/SecureRag@1355095267:ref:refs/heads/main`, not `repo:Ayush1860/SecureRag:...`.
+- The trust policy now accepts exactly those two subjects (new parameter `GitHubRepoIds`, no wildcards); the
+  test asserts two exact subjects on the branch. Re-running first_deploy.ps1 updates the role in pass 1.

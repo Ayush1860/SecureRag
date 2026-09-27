@@ -22,7 +22,7 @@ Metadata:
       - Label: {default: Image}
         Parameters: [ImageUri]
       - Label: {default: Access}
-        Parameters: [AmplifyOrigin, GitHubRepo, GitHubBranch]
+        Parameters: [AmplifyOrigin, GitHubRepo, GitHubRepoIds, GitHubBranch]
       - Label: {default: "Secrets (SSM parameter names, not values)"}
         Parameters: [AesKeyParam, ApiKeysParam, GroqKeyParam]
 
@@ -42,6 +42,14 @@ Parameters:
     Type: String
     Default: Ayush1860/SecureRag
     AllowedPattern: ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$
+  GitHubRepoIds:
+    Type: String
+    Default: Ayush1860@89765953/SecureRag@1355095267
+    AllowedPattern: ^[A-Za-z0-9_.-]+@[0-9]+/[A-Za-z0-9_.-]+@[0-9]+$
+    Description: >-
+      Same repo in GitHub's immutable OIDC subject format (owner@owner_id/repo@repo_id). Repos with
+      use_immutable_subject send this instead of owner/repo. Check it with
+      gh api repos/OWNER/REPO/actions/oidc/customization/sub (sub_claim_prefix).
   GitHubBranch:
     Type: String
     Default: main
@@ -262,7 +270,9 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepo}:ref:refs/heads/${GitHubBranch}
+                token.actions.githubusercontent.com:sub:
+                  - !Sub repo:${GitHubRepo}:ref:refs/heads/${GitHubBranch}
+                  - !Sub repo:${GitHubRepoIds}:ref:refs/heads/${GitHubBranch}
       MaxSessionDuration: 3600
       Policies:
         - PolicyName: ecr-push
