@@ -66,7 +66,7 @@ def test_template_has_no_secret_values_and_scoped_trust(template):
     assert "*" not in json.dumps(url_cors["AllowOrigins"])
 
 
-def test_only_ecr_auth_token_uses_wildcard_resource(template):
+def test_only_auth_token_actions_use_wildcard_resource(template):
     wildcard_actions = []
     for name in ("ExecutionRole", "DeployRole"):
         for policy in template["Resources"][name]["Properties"]["Policies"]:
@@ -75,4 +75,5 @@ def test_only_ecr_auth_token_uses_wildcard_resource(template):
                     wildcard_actions.append(stmt["Action"])
                 actions = stmt["Action"] if isinstance(stmt["Action"], list) else [stmt["Action"]]
                 assert not any(a.endswith(":*") or a == "*" for a in actions)
-    assert wildcard_actions == ["ecr:GetAuthorizationToken"]
+    assert wildcard_actions == ["ecr:GetAuthorizationToken",
+                                ["ecr-public:GetAuthorizationToken", "sts:GetServiceBearerToken"]]

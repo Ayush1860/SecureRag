@@ -50,6 +50,12 @@ jobs:
       - id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      # Anonymous pulls from public.ecr.aws (Lambda Web Adapter) share a quota across GitHub's runner IPs
+      # and fail with 429 "Data limit exceeded"; authenticated pulls have their own, higher limit.
+      - name: Log in to public.ecr.aws (ECR Public auth lives in us-east-1)
+        run: |
+          aws ecr-public get-login-password --region us-east-1             | docker login --username AWS --password-stdin public.ecr.aws
+
       - name: Build lambda image (AES key as a BuildKit secret, never in a layer)
         env:
           IMAGE: ${{ vars.ECR_REPOSITORY_URI }}:${{ github.sha }}

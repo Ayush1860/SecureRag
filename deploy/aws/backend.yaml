@@ -258,7 +258,9 @@ Resources:
           encrypted demo index), and update or read this one function.
         must:
           - Trust limited to repo GitHubRepo on refs/heads/GitHubBranch with audience sts.amazonaws.com.
-          - ecr:GetAuthorizationToken is the only action on "*" (it has no resource-level scoping).
+          - Only auth-token actions (ecr:GetAuthorizationToken, and ecr-public:GetAuthorizationToken +
+            sts:GetServiceBearerToken for pulling base images from public.ecr.aws without the
+            anonymous rate limit) use "*"; they have no resource-level scoping.
     Properties:
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
@@ -281,6 +283,9 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action: [ecr-public:GetAuthorizationToken, sts:GetServiceBearerToken]
                 Resource: "*"
               - Effect: Allow
                 Action:

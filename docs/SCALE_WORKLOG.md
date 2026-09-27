@@ -972,3 +972,11 @@ The Amplify console steps in deploy/aws/README.md §2, and the CSP placeholder r
   `repo:Ayush1860@89765953/SecureRag@1355095267:ref:refs/heads/main`, not `repo:Ayush1860/SecureRag:...`.
 - The trust policy now accepts exactly those two subjects (new parameter `GitHubRepoIds`, no wildcards); the
   test asserts two exact subjects on the branch. Re-running first_deploy.ps1 updates the role in pass 1.
+
+## Fix — image build hit public.ecr.aws 429 (run 36335911410)
+- OIDC now works. The build failed pulling `public.ecr.aws/awsguru/aws-lambda-adapter:0.8.4`:
+  `429 Too Many Requests - Data limit exceeded` (anonymous quota shared by GitHub runner IPs).
+- The deploy workflow logs in to public.ecr.aws first (`aws ecr-public get-login-password --region us-east-1`).
+  The deploy role gains `ecr-public:GetAuthorizationToken` + `sts:GetServiceBearerToken` on "*" (auth-token
+  actions, no resource scoping); the wildcard test was updated to allow exactly these. docker-bench.yml has no
+  AWS credentials and still pulls anonymously; re-run it if it hits the same 429.
