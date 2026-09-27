@@ -49,6 +49,11 @@ always-on EC2 instance.
 
 ## 1. First deploy (two passes, because a container Lambda needs an image to exist first)
 
+**Windows shortcut for all of sections 0-1:** after `setup_credentials.ps1`, run
+`powershell -ExecutionPolicy Bypass -File deploywsirst_deploy.ps1`. It pushes `main`, creates the
+budget and the OIDC provider, runs both stack passes with the image build on GitHub Actions in between,
+sets the GitHub variables and smoke-tests the Function URL. Every step is skipped when already done.
+
 **Pass 1: repository and deploy role** (~2 min, $0)
 ```bash
 aws cloudformation deploy --region ap-south-1 --stack-name securerag \

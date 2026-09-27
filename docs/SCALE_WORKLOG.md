@@ -962,3 +962,7 @@ The Amplify console steps in deploy/aws/README.md §2, and the CSP placeholder r
   profile `securerag`, generates a fresh AES key and the demo keys, and writes them to SSM (via temp files, never
   the command line) and the GitHub secret DEMO_KEYS_JSON; the Groq key is read with a hidden prompt. Secrets never
   pass through the assistant.
+- `deploy/aws/first_deploy.ps1`: owner-run script for sections 0-1 of deploy/aws/README.md (push, budget,
+  OIDC provider, stack pass 1, GitHub variables, image build via the workflow's bootstrap mode, stack pass 2,
+  FUNCTION_URL, smoke test). Idempotent. Written as a script because the assistant does not run AWS or push
+  commands itself in this setup.
