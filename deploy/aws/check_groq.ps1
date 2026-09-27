@@ -1,10 +1,10 @@
 # Checks the Groq key stored in SSM against the Groq API without printing the key.
 #
-#   powershell -ExecutionPolicy Bypass -File deploy\aws\check_groq.ps1 [-Model llama-3.1-8b-instant]
+#   powershell -ExecutionPolicy Bypass -File deploy\aws\check_groq.ps1 [-Model openai/gpt-oss-20b]
 #
 # Prints the chat model ids the key can use, then tries one short completion with -Model and shows
 # Groq's own error message if it fails (e.g. a retired model or one blocked for your org).
-param([string]$Model = 'llama-3.1-8b-instant')
+param([string]$Model = 'openai/gpt-oss-20b')
 
 $key = (aws ssm get-parameter --profile securerag --region ap-south-1 --name /securerag/groq_api_key `
         --with-decryption --query Parameter.Value --output text)
@@ -19,7 +19,7 @@ try {
 } catch { Write-Host "  list failed: $($_.ErrorDetails.Message)" -ForegroundColor Red }
 
 Write-Host "`n== test completion with $Model"
-$body = @{ model = $Model; max_tokens = 5; messages = @(@{ role = 'user'; content = 'Say OK' }) } | ConvertTo-Json -Depth 5
+$body = @{ model = $Model; max_tokens = 200; messages = @(@{ role = 'user'; content = 'Say OK' }) } | ConvertTo-Json -Depth 5
 try {
     $r = Invoke-RestMethod -Method Post -Uri https://api.groq.com/openai/v1/chat/completions `
         -Headers $headers -ContentType 'application/json' -Body $body

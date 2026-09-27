@@ -76,7 +76,7 @@ Parameters:
     AllowedPattern: ^/securerag/.+$
   GroqModel:
     Type: String
-    Default: llama-3.1-8b-instant
+    Default: openai/gpt-oss-20b
     AllowedPattern: ^[A-Za-z0-9._/-]+$
     Description: Groq model id (console.groq.com/docs/models). Change it here when Groq retires a model.
 

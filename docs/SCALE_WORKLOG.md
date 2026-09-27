@@ -1040,3 +1040,6 @@ Common cause: the image pipeline had never run end to end (no Docker locally, do
   llama-3.1-8b-instant (key accepted; model not found or not enabled for the org). The router now logs the
   provider's message (capped at 300 chars; no prompt text or secrets), the model is a stack parameter
   (`GroqModel` -> GROQ_MODEL), and `deploy/aws/check_groq.ps1` lists the models the stored key can use.
+- check_groq.ps1 result: the key's org has no llama-3.x models (`model_not_found`); available chat models include
+  openai/gpt-oss-20b / -120b and qwen. Default switched to `openai/gpt-oss-20b` (router + template `GroqModel`).
+  No max_tokens cap in the router, so gpt-oss's reasoning tokens can't starve the answer.

@@ -94,7 +94,7 @@ def _call_provider(provider: str, system: str, user: str, timeout: float) -> str
     if provider == "refusal":
         return REFUSAL_TEXT
     if provider == "groq":
-        return _chat_completion("groq", "GROQ_MODEL", "llama-3.1-8b-instant", timeout, system, user)
+        return _chat_completion("groq", "GROQ_MODEL", "openai/gpt-oss-20b", timeout, system, user)
     if provider == "openai":
         return _chat_completion("openai", "OPENAI_MODEL", "gpt-4o-mini", timeout, system, user)
     if provider == "anthropic":
