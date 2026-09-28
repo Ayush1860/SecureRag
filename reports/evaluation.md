@@ -1,6 +1,6 @@
 # SecureRAG — Evaluation Report
 
-Generated 2026-09-25 06:37 from `reports/beir/*.json` and `reports/scale/phase6_docs_*.json`. Reproduce with the commands at the end.
+Generated 2026-09-28 22:49 from `reports/beir/*.json` and `reports/scale/phase6_docs_*.json`. Reproduce with the commands at the end.
 
 > The earlier version of this report headlined *100% recall* measured on 5 hand-written documents.
 > That fixture is still in the unit tests (`tests/test_evaluation.py`); it is not a benchmark.
@@ -81,6 +81,19 @@ data, and unflagged ones still sit inside the data-only context preamble.
 | 1,000 | 3,101 | 36.92 | 84.0 | 1074 | 53 | 1.14 | 9.37 | 31.7 / 34.53 / 39.46 | 21.06 |
 | 10,000 | 31,429 | 263.03 | 119.5 | 1165 | 481 | 1.36 | 9.29 | 38.87 / 59.01 / 61.09 | 45.85 |
 | 50,000 | 155,860 | 1370.93 | 113.7 | 1412 | 2394 | 2.04 | 9.40 | 61.24 / 164.65 / 170.88 | 150.79 |
+
+## 4. Qdrant server in Docker (GitHub Actions)
+
+`docker compose` on a GitHub runner (4 CPUs, 15.6 GB RAM, no GPU): the API image against a Qdrant server with payload indexes, after an RBAC smoke test of the running container.
+The hardware differs from sections 2–3, so compare how retrieval latency changes across roles, not the
+absolute milliseconds. The spread is the slowest role's p95 divided by the fastest role's.
+
+| Docs | Chunks | Queries | Canary leaks | Escalations | Chunks/s | Retrieval p95 by role (ms) | Spread | Chroma spread (§3) |
+|---|---|---|---|---|---|---|---|---|
+| 10,000 | 31,429 | 800 | **0** | **0** | 29.3 | guest 66, employee 70, finance_lead 70, exec 73 | 1.11× | 1.71× |
+
+With Chroma, the more restricted the role, the slower its search (a metadata filter scans the matching rows);
+Qdrant's indexed payload filter keeps every role at about the same latency.
 
 ## Reproduce
 

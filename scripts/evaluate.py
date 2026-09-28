@@ -59,6 +59,41 @@ def _load_json(pattern: str) -> list[dict[str, Any]]:
     return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(ROOT.glob(pattern))]
 
 
+def _role_spread(report: dict[str, Any]) -> tuple[dict[str, float], float]:
+    """Per-role retrieval p95 and the slowest/fastest ratio (1.0 = filtering costs nothing)."""
+    p95 = {role: stats["retrieval_ms"]["p95"] for role, stats in report["serve"]["per_role"].items()}
+    return p95, max(p95.values()) / min(p95.values())
+
+
+def _qdrant_section(chroma_by_docs: dict[int, dict[str, Any]]) -> list[str]:
+    """Docker + Qdrant server runs from .github/workflows/docker-bench.yml (reports/scale/gha_qdrant_docs_*)."""
+    runs = sorted((r for r in _load_json("reports/scale/gha_qdrant_docs_*.json") if r["ingest"]["ok"]),
+                  key=lambda r: r["corpus"]["docs"])
+    if not runs:
+        return []
+    hw = runs[-1]["hardware"]
+    lines = ["## 4. Qdrant server in Docker (GitHub Actions)", "",
+             f"`docker compose` on a GitHub runner ({hw['cpu_count']} CPUs, {hw['ram_gb']} GB RAM, no GPU): the API "
+             "image against a Qdrant server with payload indexes, after an RBAC smoke test of the running container.",
+             "The hardware differs from sections 2–3, so compare how retrieval latency changes across roles, not the",
+             "absolute milliseconds. The spread is the slowest role's p95 divided by the fastest role's.", "",
+             "| Docs | Chunks | Queries | Canary leaks | Escalations | Chunks/s | Retrieval p95 by role (ms) | "
+             "Spread | Chroma spread (§3) |", "|---|---|---|---|---|---|---|---|---|"]
+    for r in runs:
+        s = r["serve"]
+        p95, spread = _role_spread(r)
+        ref = chroma_by_docs.get(r["corpus"]["docs"])
+        ref_spread = f"{_role_spread(ref)[1]:.2f}×" if ref else "–"
+        roles = ", ".join(f"{role} {v:.0f}" for role, v in p95.items())
+        queries = sum(p["queries"] for p in s["per_role"].values())
+        lines.append(f"| {r['corpus']['docs']:,} | {r['ingest']['chunks']:,} | {queries} | **{s['canary_leaks']}** | "
+                     f"**{(s.get('role_spoofing') or {}).get('escalations', '–')}** | {r['ingest']['chunks_per_s']} | "
+                     f"{roles} | {spread:.2f}× | {ref_spread} |")
+    lines += ["", "With Chroma, the more restricted the role, the slower its search (a metadata filter scans the "
+              "matching rows);", "Qdrant's indexed payload filter keeps every role at about the same latency.", ""]
+    return lines
+
+
 def build_report(scale_prefix: str = "phase6") -> dict[str, Any]:
     beir = _load_json("reports/beir/*.json")
     scale = sorted((r for r in _load_json(f"reports/scale/{scale_prefix}_docs_*.json") if r["ingest"]["ok"]),
@@ -132,6 +167,8 @@ def build_report(scale_prefix: str = "phase6") -> dict[str, Any]:
                          f"{s['startup_parts']['store_open_s']:.2f} | {s['startup_parts']['model_load_s']:.2f} | "
                          f"{lat['p50']} / {lat['p95']} / {lat['p99']} | {s['retrieval_ms']['p95']} |")
         lines.append("")
+
+    lines += _qdrant_section({r["corpus"]["docs"]: r for r in scale})
 
     lines += ["## Reproduce", "", "```bash",
               "python scripts/eval_beir.py --datasets scifact fiqa",

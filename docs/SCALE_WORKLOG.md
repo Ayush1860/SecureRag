@@ -1071,3 +1071,15 @@ Common cause: the image pipeline had never run end to end (no Docker locally, do
 - docs/resume_bullets.md: campus-placement version (4 bullets + one-liner + "be ready to defend"), with the
   deployment work added; test count 185. docs/interview_notes.md: questions 16-19 (deployment, secrets,
   the deploy-debugging story, how deploys are checked for security).
+
+## Docker + Qdrant benchmark on GitHub Actions (AWS plan, Prompt 1) — first run
+- Run 36453748386 (10k docs, qdrant, 27 min), green on its first run: compose build, Lambda target build
+  (throwaway key; image history and filesystem checked for the key), Qdrant up, per-role smoke test on the
+  running container, then probe + benchmark.
+- Result (4 vCPU, no GPU): 31,429 chunks, 800 queries, 0 canary leaks, 0/25 role-spoof escalations,
+  injection detection 55.7% (same as the Chroma run, as expected: it's backend-independent).
+  Retrieval p95 by role: guest 66, employee 70, finance_lead 70, exec 73 ms, a 1.11× spread vs 1.71× for Chroma
+  at 10k, where the most restricted role is slowest. Absolute latency is higher (CPU-only embeddings plus a
+  network hop to Qdrant), so the claim is the flat spread across roles, not the milliseconds.
+- reports/scale/gha_qdrant_docs_10000.{json,md}; scripts/evaluate.py adds section 4 from gha_qdrant_docs_*.
+- 50k run dispatched (36457098784); the probe projection at 29 chunks/s is ~2 h, under the 4.5 h cap.
