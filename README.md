@@ -76,6 +76,12 @@ detection rate is an honest lower bound, and the reason `INJECTION_CLASSIFIER` e
 | 10,000 | 31,429 | 120 | 1.17 GB | 1.36 s | 28 / 36 / 47 ms |
 | 50,000 | 155,860 | 114 | 1.41 GB | 2.04 s | 49 / 99 / 156 ms |
 
+With Chroma, the more restricted the role, the slower its search: guest is 3.2× slower than exec at 50k docs.
+**The Qdrant backend removes that.** Measured in Docker on a 4-CPU GitHub runner with no GPU, against a Qdrant
+server with payload indexes, retrieval p95 is 69–72 ms for every role at 155,860 chunks. That is
+the same as at 31k chunks (66–73 ms), with 0 leaks and 0 escalations
+([section 4](reports/evaluation.md#4-qdrant-server-in-docker-github-actions)).
+
 Before this work, ingest **crashed at ~1,150 docs** (a single Chroma batch over the 5,461 limit).
 Startup decrypted the whole corpus into RAM, and a wrong key triggered a silent full rebuild
 ([baseline](reports/scale/baseline.md)).

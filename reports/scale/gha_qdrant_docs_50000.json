@@ -1,0 +1,275 @@
+{
+  "label": "gha_qdrant_docs_50000",
+  "backend": "qdrant",
+  "generated_at": "2026-09-28 19:11:06",
+  "git_commit": "b4d78489212c",
+  "hardware": {
+    "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.41",
+    "python": "3.11.16",
+    "cpu_count": 4,
+    "ram_gb": 15.6,
+    "torch": "2.14.0+cpu",
+    "gpu": null
+  },
+  "data_dir": "../data/bench_root/synthetic/docs_50000",
+  "corpus": {
+    "docs": 50000,
+    "words": 21089329,
+    "canaries": 16900,
+    "injected": 984
+  },
+  "queries_per_role": 200,
+  "store_size_mb": null,
+  "ingest": {
+    "process_wall_s": 6274.69,
+    "peak_rss_mb": 1266.1,
+    "ok": true,
+    "chunks": 155860,
+    "ingest_s": 6273.35,
+    "chunks_per_s": 24.8
+  },
+  "serve": {
+    "peak_rss_mb": 976.7,
+    "process_wall_s": 85.66,
+    "ok": true,
+    "startup_s": 7.01,
+    "startup_parts": {
+      "model_load_s": 5.269,
+      "store_open_s": 0.654
+    },
+    "per_role": {
+      "guest": {
+        "queries": 200,
+        "errors": 0,
+        "latency_ms": {
+          "p50": 70.68,
+          "p95": 76.24,
+          "p99": 77.33,
+          "mean": 71.28
+        },
+        "retrieval_ms": {
+          "p50": 64.03,
+          "p95": 69.62,
+          "p99": 70.64,
+          "mean": 64.66
+        },
+        "canary_leaks": 0,
+        "authorized_canaries_seen": 0,
+        "flagged_chunks": 15
+      },
+      "employee": {
+        "queries": 200,
+        "errors": 0,
+        "latency_ms": {
+          "p50": 73.22,
+          "p95": 78.42,
+          "p99": 80.27,
+          "mean": 74.04
+        },
+        "retrieval_ms": {
+          "p50": 66.74,
+          "p95": 71.92,
+          "p99": 73.59,
+          "mean": 67.5
+        },
+        "canary_leaks": 0,
+        "authorized_canaries_seen": 0,
+        "flagged_chunks": 19
+      },
+      "finance_lead": {
+        "queries": 200,
+        "errors": 0,
+        "latency_ms": {
+          "p50": 70.37,
+          "p95": 75.26,
+          "p99": 76.35,
+          "mean": 71.1
+        },
+        "retrieval_ms": {
+          "p50": 63.81,
+          "p95": 68.72,
+          "p99": 69.93,
+          "mean": 64.61
+        },
+        "canary_leaks": 0,
+        "authorized_canaries_seen": 532,
+        "flagged_chunks": 8
+      },
+      "exec": {
+        "queries": 200,
+        "errors": 0,
+        "latency_ms": {
+          "p50": 74.37,
+          "p95": 78.43,
+          "p99": 83.35,
+          "mean": 75.87
+        },
+        "retrieval_ms": {
+          "p50": 67.76,
+          "p95": 71.56,
+          "p99": 75.28,
+          "mean": 69.34
+        },
+        "canary_leaks": 0,
+        "authorized_canaries_seen": 518,
+        "flagged_chunks": 2
+      }
+    },
+    "latency_ms": {
+      "p50": 72.26,
+      "p95": 77.85,
+      "p99": 80.27,
+      "mean": 73.08
+    },
+    "retrieval_ms": {
+      "p50": 65.67,
+      "p95": 71.33,
+      "p99": 73.59,
+      "mean": 66.53
+    },
+    "canary_leaks": 0,
+    "leak_examples": [],
+    "injection_detection": {
+      "chunks": 155860,
+      "true_positives": 571,
+      "false_positives": 0,
+      "false_negatives": 434,
+      "detection_rate": 0.5682,
+      "false_positive_rate": 0.0
+    },
+    "role_spoofing": {
+      "attempts": 25,
+      "escalations": 0,
+      "blocked_or_contained": 25,
+      "block_rate": 1.0
+    }
+  },
+  "compare": {
+    "label": "phase6_docs_50000",
+    "backend": null,
+    "hardware": {
+      "platform": "Windows-10-10.0.26200-SP0",
+      "python": "3.11.4",
+      "cpu_count": 8,
+      "ram_gb": 15.8,
+      "torch": "2.2.2+cu121",
+      "gpu": "NVIDIA GeForce GTX 1650"
+    },
+    "serve": {
+      "peak_rss_mb": 1558.4,
+      "process_wall_s": 126.26,
+      "ok": true,
+      "startup_s": 13.64,
+      "startup_parts": {
+        "model_load_s": 9.403,
+        "store_open_s": 2.039
+      },
+      "per_role": {
+        "guest": {
+          "queries": 200,
+          "errors": 0,
+          "latency_ms": {
+            "p50": 155.2,
+            "p95": 168.8,
+            "p99": 171.75,
+            "mean": 156.71
+          },
+          "retrieval_ms": {
+            "p50": 141.92,
+            "p95": 155.7,
+            "p99": 158.35,
+            "mean": 143.62
+          },
+          "canary_leaks": 0,
+          "authorized_canaries_seen": 0,
+          "flagged_chunks": 15
+        },
+        "employee": {
+          "queries": 200,
+          "errors": 0,
+          "latency_ms": {
+            "p50": 68.61,
+            "p95": 112.1,
+            "p99": 114.24,
+            "mean": 73.58
+          },
+          "retrieval_ms": {
+            "p50": 55.75,
+            "p95": 98.9,
+            "p99": 100.82,
+            "mean": 60.76
+          },
+          "canary_leaks": 0,
+          "authorized_canaries_seen": 0,
+          "flagged_chunks": 19
+        },
+        "finance_lead": {
+          "queries": 200,
+          "errors": 0,
+          "latency_ms": {
+            "p50": 59.69,
+            "p95": 70.23,
+            "p99": 73.15,
+            "mean": 62.01
+          },
+          "retrieval_ms": {
+            "p50": 46.71,
+            "p95": 57.28,
+            "p99": 60.19,
+            "mean": 49.25
+          },
+          "canary_leaks": 0,
+          "authorized_canaries_seen": 526,
+          "flagged_chunks": 8
+        },
+        "exec": {
+          "queries": 200,
+          "errors": 0,
+          "latency_ms": {
+            "p50": 59.78,
+            "p95": 61.63,
+            "p99": 64.92,
+            "mean": 61.05
+          },
+          "retrieval_ms": {
+            "p50": 47.18,
+            "p95": 48.8,
+            "p99": 51.74,
+            "mean": 48.37
+          },
+          "canary_leaks": 0,
+          "authorized_canaries_seen": 513,
+          "flagged_chunks": 2
+        }
+      },
+      "latency_ms": {
+        "p50": 61.24,
+        "p95": 164.65,
+        "p99": 170.88,
+        "mean": 88.34
+      },
+      "retrieval_ms": {
+        "p50": 48.16,
+        "p95": 150.79,
+        "p99": 157.79,
+        "mean": 75.5
+      },
+      "canary_leaks": 0,
+      "leak_examples": [],
+      "injection_detection": {
+        "chunks": 155860,
+        "true_positives": 571,
+        "false_positives": 0,
+        "false_negatives": 434,
+        "detection_rate": 0.5682,
+        "false_positive_rate": 0.0
+      },
+      "role_spoofing": {
+        "attempts": 25,
+        "escalations": 0,
+        "blocked_or_contained": 25,
+        "block_rate": 1.0
+      }
+    }
+  }
+}

@@ -1083,3 +1083,7 @@ Common cause: the image pipeline had never run end to end (no Docker locally, do
   network hop to Qdrant), so the claim is the flat spread across roles, not the milliseconds.
 - reports/scale/gha_qdrant_docs_10000.{json,md}; scripts/evaluate.py adds section 4 from gha_qdrant_docs_*.
 - 50k run dispatched (36457098784); the probe projection at 29 chunks/s is ~2 h, under the 4.5 h cap.
+- 50k run 36457098784 (1 h 53 min): 155,860 chunks at 24.8 chunks/s (CPU only), 800 queries, 0 leaks,
+  0/25 escalations, injection detection 56.8%. Retrieval p95 by role: guest 70, employee 72, finance_lead 69,
+  exec 72 ms, a 1.05× spread (Chroma at 50k: 3.19×; guest 156 ms). Flat from 31k to 156k chunks. Added to
+  reports/scale, evaluation.md section 4, README Results, and resume bullet 2 (with the hardware caveat).

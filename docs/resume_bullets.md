@@ -13,8 +13,9 @@ deployment (`docs/SCALE_WORKLOG.md`, "Live and verified").
   encrypted with AES-256-GCM, bound to its access labels. **0 data leaks** across 2,400 adversarial queries
   on a corpus of up to **156k encrypted chunks**.
 - Designed hybrid search (dense vectors + keyword BM25 with rank fusion and reranking) that reaches
-  **nDCG@10 0.699 on BEIR SciFact** (+4.2 points over dense-only). Filtered retrieval at the 95th percentile
-  (p95) is **2.8× faster** at 31k chunks (102 → 36 ms).
+  **nDCG@10 0.699 on BEIR SciFact** (+4.2 points over dense-only). With a Qdrant backend, 95th-percentile
+  (p95) retrieval stays **~70 ms for every role at 156k chunks**, where Chroma's most restricted role took
+  156 ms.
 - Re-architected ingestion from a design that crashed at ~1.1k documents into a streaming, incremental
   pipeline that handles **50k documents**, with ~2 s startup and 1.4 GB peak memory.
 - **Deployed it on AWS Lambda for under $1/month:** a container image with the search index encrypted at
@@ -66,3 +67,6 @@ enforced before generation, 0 leaks in 2,400 adversarial queries at 156k chunks,
 - Injection detection with regex alone is ~56% (half the payloads are paraphrased on purpose). Say so if asked.
   The defence is that flagged and unflagged text is always treated as data, not instructions.
 - The live demo runs on synthetic documents; the demo keys are public on purpose.
+- The Qdrant numbers come from a 4-CPU GitHub runner with no GPU, and the Chroma ones from a laptop with a GPU.
+  The fair claim is the shape: Qdrant's p95 is flat across roles (1.05× spread) and across 31k → 156k chunks,
+  while Chroma's spread grows to 3.2×. See reports/evaluation.md, section 4.

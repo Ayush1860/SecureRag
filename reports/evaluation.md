@@ -1,6 +1,6 @@
 # SecureRAG — Evaluation Report
 
-Generated 2026-09-28 22:49 from `reports/beir/*.json` and `reports/scale/phase6_docs_*.json`. Reproduce with the commands at the end.
+Generated 2026-09-29 00:42 from `reports/beir/*.json` and `reports/scale/phase6_docs_*.json`. Reproduce with the commands at the end.
 
 > The earlier version of this report headlined *100% recall* measured on 5 hand-written documents.
 > That fixture is still in the unit tests (`tests/test_evaluation.py`); it is not a benchmark.
@@ -91,6 +91,7 @@ absolute milliseconds. The spread is the slowest role's p95 divided by the faste
 | Docs | Chunks | Queries | Canary leaks | Escalations | Chunks/s | Retrieval p95 by role (ms) | Spread | Chroma spread (§3) |
 |---|---|---|---|---|---|---|---|---|
 | 10,000 | 31,429 | 800 | **0** | **0** | 29.3 | guest 66, employee 70, finance_lead 70, exec 73 | 1.11× | 1.71× |
+| 50,000 | 155,860 | 800 | **0** | **0** | 24.8 | guest 70, employee 72, finance_lead 69, exec 72 | 1.05× | 3.19× |
 
 With Chroma, the more restricted the role, the slower its search (a metadata filter scans the matching rows);
 Qdrant's indexed payload filter keeps every role at about the same latency.
