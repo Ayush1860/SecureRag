@@ -85,9 +85,9 @@ and the page never chooses the role. What bounds abuse and cost:
 
 Never publish keys for a deployment that serves real documents.
 
-### Frontend headers (Amplify)
+### Frontend headers
 
-`amplify.yml` sets:
+The live demo is on GitHub Pages (below). When hosted on Amplify instead, `amplify.yml` sets:
 - a CSP whose `connect-src` allows only `'self'` and the Function URL, with `script-src 'self'`,
   `frame-ancestors 'none'` and `object-src 'none'`;
 - `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `X-Frame-Options: DENY`, HSTS and a

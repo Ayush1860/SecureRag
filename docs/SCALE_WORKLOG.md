@@ -1060,3 +1060,11 @@ Common cause: the image pipeline had never run end to end (no Docker locally, do
 - Live answers (~1-2 s warm): employee gets general/engineering/hr at public/internal only; guest gets
   general/public only and says it lacks the confidential figures; exec gets the confidential finance memo.
 - https://ayush1860.github.io/SecureRag/ serves the fixed bundle: "System Online (3168 chunks)", no console errors.
+
+## Follow-ups (2026-09-28)
+- README: "Live demo" section (URL, synthetic corpus, cold start vs warm latency, cost and deploy pipeline).
+- SECURITY.md: "Frontend headers" no longer titled as Amplify-only; Pages is the live host.
+- docker-bench.yml: pre-pulls the Lambda Web Adapter with retries (no AWS creds there, so public.ecr.aws is
+  anonymous and can return 429), and fixes two command lines that an earlier edit had joined onto one line.
+  The workflow has still never run; it needs a push first, then a manual dispatch (10k docs, then 50k if the
+  probe allows).

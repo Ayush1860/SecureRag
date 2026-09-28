@@ -62,7 +62,14 @@ jobs:
         run: |
           python3 -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())" > "$RUNNER_TEMP/aes_key"
           echo "::add-mask::$(cat "$RUNNER_TEMP/aes_key")"
-          DOCKER_BUILDKIT=1 docker build --target lambda             --secret id=aes_key,src="$RUNNER_TEMP/aes_key" -t securerag:lambda .
+          # No AWS credentials here, so public.ecr.aws is pulled anonymously; its shared quota answers
+          # 429 "Data limit exceeded" at times. Pre-pull with retries; the build then uses the local copy.
+          for i in 1 2 3 4 5; do
+            docker pull public.ecr.aws/awsguru/aws-lambda-adapter:0.8.4 && break
+            echo "pull attempt $i failed; retrying in $((i * 30)) s"; sleep $((i * 30))
+          done
+          DOCKER_BUILDKIT=1 docker build --target lambda \
+            --secret id=aes_key,src="$RUNNER_TEMP/aes_key" -t securerag:lambda .
           docker run --rm --entrypoint sh securerag:lambda -c '
             test -x /opt/extensions/lambda-adapter && echo "adapter ok" &&
             test -f /opt/demo/index/ingest_state.sqlite && echo "encrypted index ok" &&
@@ -71,7 +78,8 @@ jobs:
           if docker history --no-trunc securerag:lambda | grep -qF "$KEY"; then
             echo "AES key leaked into image history"; exit 1
           fi
-          docker run --rm --entrypoint sh securerag:lambda -c "! grep -rqsF '$KEY' /opt /app /etc 2>/dev/null"             && echo "key not present in image filesystem"
+          docker run --rm --entrypoint sh securerag:lambda -c "! grep -rqsF '$KEY' /opt /app /etc 2>/dev/null" \
+            && echo "key not present in image filesystem"
           rm -f "$RUNNER_TEMP/aes_key"
           docker image ls securerag
           df -h /
