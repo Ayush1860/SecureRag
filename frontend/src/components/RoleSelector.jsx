@@ -23,6 +23,9 @@ const CLEARANCE_LEVELS = {
   confidential: { label: 'CONFIDENTIAL', class: 'pill-confidential' },
 };
 
+// admin has no document access at all (it manages keys and reads the audit log).
+const deptList = (departments) => (departments.length ? departments.join(', ') : 'none (audit only)');
+
 export default function RoleSelector({ currentRole, onSelectRole, rolePolicies, locked = false }) {
   const currentPolicy = rolePolicies[currentRole] || {
     max_clearance: 'internal',
@@ -39,7 +42,7 @@ export default function RoleSelector({ currentRole, onSelectRole, rolePolicies, 
       <div className="card-panel-header">
         <div className="card-panel-title">
           <Shield size={18} className="text-cyan" />
-          <span>Identity & Clearance (RBAC)</span>
+          <span>Role & Clearance</span>
         </div>
         <span className="security-tag tag-cyan">{locked ? 'From credential' : 'Dev role switcher'}</span>
       </div>
@@ -74,8 +77,8 @@ export default function RoleSelector({ currentRole, onSelectRole, rolePolicies, 
                   {pill.label}
                 </span>
               </div>
-              <div className="role-depts-preview" title={policy.departments.join(', ')}>
-                Depts: {policy.departments.join(', ')}
+              <div className="role-depts-preview" title={deptList(policy.departments)}>
+                Depts: {deptList(policy.departments)}
               </div>
             </button>
           );
@@ -90,7 +93,7 @@ export default function RoleSelector({ currentRole, onSelectRole, rolePolicies, 
         <div className="policy-banner-row">
           <span className="policy-label">Authorized Depts:</span>
           <span className="policy-value" style={{ fontSize: '0.68rem' }}>
-            {currentPolicy.departments.join(', ')}
+            {deptList(currentPolicy.departments)}
           </span>
         </div>
         <div className="policy-banner-row">
