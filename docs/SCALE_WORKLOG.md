@@ -1068,3 +1068,6 @@ Common cause: the image pipeline had never run end to end (no Docker locally, do
   anonymous and can return 429), and fixes two command lines that an earlier edit had joined onto one line.
   The workflow has still never run; it needs a push first, then a manual dispatch (10k docs, then 50k if the
   probe allows).
+- docs/resume_bullets.md: campus-placement version (4 bullets + one-liner + "be ready to defend"), with the
+  deployment work added; test count 185. docs/interview_notes.md: questions 16-19 (deployment, secrets,
+  the deploy-debugging story, how deploys are checked for security).
